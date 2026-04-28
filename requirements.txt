@@ -1,6 +1,43 @@
+# NetDroid v1.4.0 — dependências completas (cross-platform)
+# Instalação: pip install -r requirements.txt
+# Para Kali Linux com binários nativos: ver requirementskali.txt
+# ─────────────────────────────────────────────────────────────
+
+# Core (UI + HTTP + parsing)
 rich>=13.0
 colorama>=0.4
 aiohttp>=3.9
 requests>=2.31
 beautifulsoup4>=4.12
 lxml>=4.9
+
+# Modo apex --root + --kamikase (raw sockets, ARP, SYN, 802.11)
+scapy>=2.5
+
+# OS detection avançado em --god (combinada com binário `nmap`)
+python-nmap>=0.7
+
+# Dashboard C2 ao vivo (--live)
+flask>=3.0
+flask-socketio>=5.3
+python-socketio>=5.10
+python-engineio>=4.8
+simple-websocket>=1.0
+
+# PDF executivo automático (--god)
+reportlab>=4.0
+
+# ─────────────────────────────────────────────────────────────
+# BINÁRIOS NATIVOS (NÃO instalam via pip — instalar pelo SO):
+#
+#   Linux/Kali :
+#     sudo apt install aircrack-ng mdk4 hcxdumptool hcxtools hashcat \
+#                       tcpdump arp-scan iw nmap iperf3 iptables
+#
+#   Termux (Android com root):
+#     pkg install aircrack-ng mdk4 tcpdump iw nmap iperf3 tsu
+#
+#   Windows :
+#     netsh, pktmon, powershell já vêm no SO.
+#     Para --kamikase / SYN flood raw, instalar NPCAP:
+#       https://npcap.com/   (marcar "WinPcap API-compatible Mode")

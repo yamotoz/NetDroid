@@ -1,0 +1,64 @@
+# NetDroid v1.4.0 — Setup completo Kali Linux (1 linha, zero perguntas)
+# ═════════════════════════════════════════════════════════════════════
+#
+# COPIE E COLE A LINHA ABAIXO NO TERMINAL DO KALI:
+#
+# ─────────────────────────────────────────────────────────────────────
+sudo apt update -y && sudo apt install -y python3 python3-pip python3-venv aircrack-ng mdk4 hcxdumptool hcxtools hashcat tcpdump arp-scan iw wireless-tools nmap iperf3 iptables net-tools curl wget git && pip install --break-system-packages -r requirements.txt && mkdir -p WordList && (test -f /usr/share/wordlists/rockyou.txt || sudo gunzip -k /usr/share/wordlists/rockyou.txt.gz 2>/dev/null) && cp /usr/share/wordlists/rockyou.txt ./WordList/ 2>/dev/null; cp /usr/share/wordlists/fasttrack.txt ./WordList/ 2>/dev/null; echo "✓ NetDroid pronto. Rode: sudo python NetDroid.py --root --auto --god --live"
+# ─────────────────────────────────────────────────────────────────────
+#
+# O que esse comando faz, em ordem:
+#   1) sudo apt update -y                      → atualiza repositório
+#   2) sudo apt install -y <pacotes>           → todos os binários nativos
+#   3) pip install --break-system-packages -r requirements.txt
+#                                              → todas as deps Python
+#   4) mkdir -p WordList                       → garante a pasta de wordlists
+#   5) gunzip rockyou.txt.gz                   → descompacta se ainda gz
+#   6) cp rockyou.txt fasttrack.txt → WordList → wordlists prontas para crack
+#
+# Pacotes APT instalados:
+#   python3 python3-pip python3-venv
+#   aircrack-ng mdk4 hcxdumptool hcxtools hashcat
+#   tcpdump arp-scan iw wireless-tools
+#   nmap iperf3 iptables
+#   net-tools curl wget git
+#
+# ═════════════════════════════════════════════════════════════════════
+# Dependências Python (instaladas pelo pip — NÃO edite a lista aqui,
+# o pip lê do arquivo requirements.txt no mesmo diretório):
+# ═════════════════════════════════════════════════════════════════════
+
+rich>=13.0
+colorama>=0.4
+aiohttp>=3.9
+requests>=2.31
+beautifulsoup4>=4.12
+lxml>=4.9
+scapy>=2.5
+python-nmap>=0.7
+flask>=3.0
+flask-socketio>=5.3
+python-socketio>=5.10
+python-engineio>=4.8
+simple-websocket>=1.0
+eventlet>=0.35
+reportlab>=4.0
+
+# ═════════════════════════════════════════════════════════════════════
+# VERIFICAÇÃO PÓS-INSTALAÇÃO (rode também numa linha):
+# ═════════════════════════════════════════════════════════════════════
+#
+# python3 -c "import scapy, flask, flask_socketio, reportlab; print('OK')" && which aireplay-ng mdk4 hcxdumptool hashcat tcpdump iw nmap && echo "✓ Tudo instalado" && sudo python NetDroid.py --version
+#
+# ═════════════════════════════════════════════════════════════════════
+# COMANDOS DE EXEMPLO (após instalação):
+# ═════════════════════════════════════════════════════════════════════
+#
+# Reconhecimento + dashboard ao vivo:
+#   sudo python NetDroid.py --root --auto --god --live
+#
+# Kamikase com 3 zonas drag-drop:
+#   sudo python NetDroid.py --root --kamikase --live
+#
+# Ataque colossal a todos os hosts:
+#   sudo python NetDroid.py --root --auto --godfall

