@@ -1,546 +1,347 @@
-# NetDroid — Agent Log (Diário de Bordo Técnico)
+# NetDroid — Agent Handover Log
 
-## Sessão: 2026-04-26
-
-### Contexto
-Construção completa do `NetDroid.py` — script single-file de análise de redes WiFi, nível profissional, para execução no Termux (Android) sem root.
+> Documento vivo de contexto para qualquer agente de IA que pegar o projeto. Lê isso e o `NetDroid.py` em paralelo. Tudo aqui é verdade no commit atual; coisas que mudarem precisam ser refletidas aqui.
 
 ---
 
-### Arquitetura Implementada
+## 1. O que é o NetDroid
 
-O script é composto por **12 classes** em um único arquivo (`NetDroid.py`, ~1690 linhas):
+Single-file Python (`NetDroid.py`, ~10.6k linhas, **v1.5.2**) — toolkit de auditoria/ataque WiFi com dashboard web em tempo real (Flask + SocketIO). Roda em **Kali/Linux** (full power), **Termux com root** (Android), e **Windows** (modos limitados, sem 802.11 raw).
 
-| Classe | Responsabilidade |
-|---|---|
-| `TerminalUI` | Interface terminal cyberpunk via `rich`. Banner ASCII, tabelas, progress bars, logging colorido, consent prompts. Graceful fallback para print() se rich indisponível. |
-| `NetworkDetector` | Auto-detecção de gateway/subnet/local IP/SSID. Métodos: `ip route`, socket probe, `termux-wifi-connectioninfo`, `iwgetid`, `nmcli`. Cria pasta de output com nome do SSID. |
-| `HostDiscovery` | Descoberta de hosts: lê `/proc/net/arp` (sem root), ping sweep asyncio paralelo, TCP probe em hosts silenciosos (portas 80,443,22,8080,8443), TTL fingerprint (Linux/Windows/iOS), MAC vendor lookup offline (100+ prefixos). |
-| `PortScanner` | TCP connect scan 100% asyncio. 3 modos: `normal` (top 20), `insane` (1-65535), `stealth` (top 100, delays random). Banner grabbing em portas abertas. Service fingerprint por porta + banner. |
-| `LatencyMonitor` | Thread daemon que faz ping contínuo ao gateway durante stress tests. Mede baseline, avg, min, max, packet loss. |
-| `StressEngine` | Orquestrador de stress: TCP connection flood (escalas crescentes), UDP storm (broadcast, payload 65507 bytes), HTTP storm (aiohttp, requisições crescentes). Modo `overflow` com iperf3 (TCP/UDP, throughput, jitter, loss). |
-| `GodMode` | Modo agressivo: UDP broadcast sweep, SSDP M-SEARCH, NetBIOS name query, HTTP deep probe, API endpoint discovery, RTSP discovery. Ataques avançados em IoT: ONVIF WS-Discovery, HTTP Slowloris, RTSP Connection Exhaustion, Mirai Telnet/SSH Brute-force. |
-| `ReportEngine` | Gera relatório HTML cyberpunk (tema escuro, cards com borda vermelha, SVG topology map, tabelas de hosts/serviços/credenciais) e resumo executivo TXT. |
-| `Upgrader` | Auto-update do GitHub: compara versão, faz backup, substitui automaticamente. |
+Linguagem dos comentários e UI: **PT-BR**. Arquitetura: deliberadamente single-file (não dividir em módulos sem instrução explícita do usuário).
 
----
+### Modos principais (CLI)
+- `--auto` — varredura automática da rede local (host discovery + port scan + latency)
+- `--god` — auditoria profunda + relatório PDF (`GodMode` class)
+- `--godfall` — ataque colossal a TODOS os hosts (incluindo gateway)
+- `--kamikase` — ataque WiFi 802.11 (deauth/handshake/crack) com 3 zonas drag-drop
+- `--live` — habilita dashboard C2 em http://127.0.0.1:5556 (combina com `--god` ou `--kamikase`)
+- `--root` — força capabilities elevadas (necessário para `--kamikase`)
 
-### Decisões Técnicas
-
-1. **Zero dependência de root**: Todo o scan é TCP connect via asyncio (não usa raw sockets). ARP cache lido de `/proc/net/arp` (disponível sem root no Linux/Termux/Windows).
-
-2. **Cross-Platform nativo**: Funciona em Linux/Termux e Windows. O script ajusta dinamicamente `ping` (`-c` vs `-n`), roteamento (`ip route` vs `ipconfig`) e leitura de cache MAC (`/proc/net/arp` vs `arp -a`).
-
-3. **Dependências mínimas**: Removidos `scapy`, `python-nmap`, `netifaces`, `mac-vendor-lookup` do requirements. O script resolve tudo nativamente.
-
-4. **Asyncio puro**: Ping sweep, TCP scan, banner grabbing, HTTP probes — tudo assíncrono com semáforos para controle de concorrência (`CONCURRENT_LIMIT = 500`).
-
-5. **Ataques IoT não-privilegiados**: Os ataques `--slowloris`, `--rtsp-kill` e `--mirai` operam inteiramente na camada 7 (aplicação), permitindo travar dispositivos e descobrir credenciais sem raw sockets.
-
----
-
-### CLI — Flags e Combinações
-
-```
---auto          Auto-detect gateway/subnet
---t TARGET      Alvo manual (IP ou subnet CIDR)
---discover      Descoberta completa de hosts
---normal        Scan top 20 portas
---Insane        Scan 1-65535 (velocidade máxima)
---stealth       Scan top 100 (furtivo)
---ports P,P,P   Portas customizadas
---overfull      Stress pesado (TCP+UDP+HTTP flood)
---overflow      Stress profissional (iperf3)
---god           God Mode (broadcast+NetBIOS+HTTP probe)
---slowloris     [GOD] HTTP Slowloris attack (Esgota conexões web de IoT)
---rtsp-kill     [GOD] RTSP Connection exhaustion (Trava câmeras IP)
---onvif         [GOD] ONVIF WS-Discovery (Detecta câmeras IP em multicast)
---mirai         [GOD] Mirai botnet brute-force (Telnet/SSH senhas padrão)
---upgrade       Auto-update do GitHub
---version       Versão atual
-```
-
-**Ordem de execução**: NetworkDetector → HostDiscovery → PortScanner → StressEngine → GodMode → ReportEngine
-
-**Combinações**: Flags são aditivas. `--auto --discover --Insane --god` executa discover + scan insane + god mode em sequência.
-
----
-
-### Estrutura de Output
-
-```
-{SSID}/
-├── report_YYYY-MM-DD_HHhMM.html   ← relatório cyberpunk completo
-└── {SSID}_YYYY-MM-DD.txt           ← resumo executivo texto
-```
-
----
-
-### Databases Embutidos
-
-- **MAC Vendors**: 100+ prefixos (Apple, Samsung, TP-Link, Hikvision, Dahua, ASUS, MikroTik, Cisco, Intel, Huawei, Raspberry Pi, etc.)
-- **Default Credentials**: 10 fabricantes × múltiplas combinações (generic, dahua, hikvision, tp-link, asus, mikrotik, d-link, linksys, cisco, huawei)
-- **Service Map**: 70+ portas mapeadas para nomes de serviço
-- **RTSP Paths**: 12 paths comuns de câmeras IP
-- **API Endpoints**: 11 endpoints comuns de dispositivos IoT/roteadores
-- **Device Fingerprints**: 18 assinaturas de fabricantes por análise de título/body/server HTTP
-
----
-
-### Instalação no Termux
-
+### Comando alvo do usuário
 ```bash
-pkg update && pkg upgrade
-pkg install python iperf3
-pip install -r requirements.txt
-python NetDroid.py --version
+sudo -E python NetDroid.py --root --kamikase --live
 ```
-
-Opcionais: `pkg install nmap` (para OS detection avançado)
 
 ---
 
-### Notas para Agentes Futuros
+## 2. Layout de pastas (criadas em runtime)
 
-- O arquivo é **single-file** por design. Não fragmentar.
-- Todas as constantes editáveis estão no topo do arquivo (VERSION, URLs, NETBIOS_MESSAGE, etc.)
-- `HAS_RICH`, `HAS_AIOHTTP`, etc. são flags de graceful degradation — o script funciona mesmo sem dependências opcionais.
-- O `TerminalUI` tem fallback completo para `print()` quando `rich` não está instalado.
-- Para adicionar novos fabricantes de MAC: editar `MAC_VENDORS` dict.
-- Para adicionar novas credenciais padrão: editar `DEFAULT_CREDS` dict.
-- O relatório HTML é gerado com f-strings puras (sem Jinja2) para eliminar dependência.
-- `asyncio.run()` é o entry point — compatível com Python 3.7+.
+| Path | Função |
+|---|---|
+| `./WordList/` | wordlists `.txt` consumidas pelo hashcat |
+| `./memoria/db.json` | persistência cross-session (APs vistos, histórico) |
+| `./memoria/handshakes/` | `.cap`/`.pcapng` capturados |
+| `./Pass/senhas.txt` | append-only `ESSID:BSSID:senha:wordlist:data` |
+| `./imports/` | exports PDF+TXT por zona |
+| `./venv/` | ambiente Python isolado (Kali) |
+| `./agentlog.md` | este arquivo |
+| `./README.md` | doc do usuário final |
+| `./requirements.txt` | deps Python cross-platform |
+| `./requirementskali.txt` | comando 1-line de setup completo no Kali |
 
-## Sessão: 2026-04-27
+---
 
-### Diário de bordo (análise inicial do repo)
+## 3. Constantes globais relevantes ([NetDroid.py:117-202](NetDroid.py#L117))
 
-Contexto: revisão do projeto no workspace `C:\Users\diluc\Desktop\NetDroid` para entender a arquitetura real (código) vs documentação.
-
-Arquivos no root:
-- `NetDroid.py` (script único, ~2.1k linhas)
-- `README.md` (uso e flags)
-- `ideia.md` (plano/engenharia; parece conter partes antigas e/ou mais extensas do que o requirements atual)
-- `requirements.txt` (dependências: rich, colorama, aiohttp, requests, bs4, lxml)
-- `agentlog.md` (este arquivo)
-
-O que o código realmente tem (NetDroid.py):
-- 9 classes: `TerminalUI`, `NetworkDetector`, `HostDiscovery`, `PortScanner`, `LatencyMonitor`, `StressEngine`, `GodMode`, `ReportEngine`, `Upgrader`.
-- Flags no parser: `--auto`, `--t`, `--discover`, `--normal`, `--Insane`, `--stealth`, `--ports`, `--overfull`, `--overflow`, `--flood`, `--god`, `--slowloris`, `--rtsp-kill`, `--onvif`, `--mirai`, `--upgrade`, `--version`.
-- Orquestração: detect/rede → (opcional) discover → (opcional) scan → (opcional) stress → (opcional) god → report (exceto quando `--flood`).
-- Há prompts de consentimento para operações de risco (stress pesado e rotinas do `GodMode`).
-
-Pontos importantes (ética/segurança):
-- Existem rotinas explicitamente destrutivas/invasivas no `GodMode` (ex.: DoS por slowloris/rtsp exhaustion e brute-force estilo “mirai”).
-- Mesmo com prompts de consentimento, isso aumenta o risco de uso indevido. Para manter o projeto estritamente “ético”, faz sentido separar bem “auditoria passiva” vs “ação ativa” e endurecer guardrails (ex.: exigir flag extra + aviso + log de autorização, ou remover por padrão).
-
-Próximos passos de análise:
-1) Mapear o dataflow completo (dados por host: ip/mac/vendor/os/latência/portas/serviços) e onde cada módulo escreve/consome.
-2) Revisar a geração de relatórios (campos, sanitização, persistência em disco).
-3) Revisar a superfície de risco (funções ativas) e propor modo “safe by default” para auditoria/autorização.
-
-### Atualização de implementação (2026-04-27)
-
-Mudanças aplicadas no `NetDroid.py` para orientar o fluxo a auditoria defensiva:
-
-- Adicionada a flag `--godfall` como modo de resiliência controlado (não-destrutivo), com métricas por host.
-- `--god` remodelado para auditoria profunda: inventário, exposição web/API/RTSP/ONVIF e scoring de risco por host.
-- Rotinas ofensivas (`--mirai`, `--slowloris`, `--rtsp-kill`) mantidas apenas como flags legadas com aviso de desativação.
-- `_audit_default_creds` removido do fluxo e substituído por avaliação passiva de superfície de login (`_evaluate_login_surface`).
-- Adicionado motor de risco (`_assess_risks`) com findings estruturados (`risk_findings`).
-- Fluxo principal atualizado para incluir `--godfall` em `has_action`, execução no `StressEngine` e inclusão de riscos em `god_data`.
-- Relatório HTML revisado para melhor responsividade (desktop/mobile), tabela com scroll, cards e seções novas:
-  - `Risk Findings`
-  - `Godfall Resilience`
-  - `Latency During Stress`
-- Relatório TXT revisado para formato executivo enxuto com:
-  - resumo geral
-  - risco por host
-  - top findings
-  - bloco de resiliência do Godfall
-- NetBIOS em modo inventário: envio ativo de mensagem desativado.
-
-Validação:
-- `python -m py_compile NetDroid.py` executado com sucesso.
-- `python NetDroid.py --version` executado com sucesso.
-
-### Iteração adicional do Godfall (2026-04-27)
-
-Reforço aplicado no `--godfall` sem sair do escopo de resiliência controlada:
-
-- O fluxo deixou de ser sweep simples e virou benchmark em fases:
-  - `VANGUARD`
-  - `SIEGE`
-  - `OVERDRIVE`
-- Cada fase agora tem:
-  - multiplicador de tentativas por host
-  - concorrência própria
-  - delay próprio entre operações
-  - snapshot de latência
-- O benchmark usa mix de operações por serviço:
-  - `tcp-connect`
-  - `http-head`
-  - `http-get`
-- Hosts são priorizados com gateway primeiro para leitura operacional mais útil.
-- Resultado do Godfall agora registra:
-  - `phases`
-  - `per_host`
-  - `avg_success_rate`
-  - métricas médias por host
-- Relatórios HTML/TXT atualizados para exibir as fases e ranking de resiliência.
-- Godfall ganhou telemetria de fase e safety rails:
-  - taxa de sucesso global por fase
-  - abort automático por degradação (latência/loss/sucesso) com motivo registrado
-  - janela de recuperação (tempo até a latência voltar ao alvo)
-  - reutilização de sessão HTTP por fase quando `aiohttp` está disponível (mais realista e eficiente)
-
-Validação pós-reforço:
-- `python -m py_compile NetDroid.py` executado com sucesso.
-
-### Godfall apex / TITANFALL (2026-04-27)
-
-Reforço exponencial do `--godfall` para colocá-lo no mesmo patamar (ou acima) do `--flood`, mantendo a estética em fases e os safety rails:
-
-- Constantes recalibradas em `NetDroid.py`:
-  - `GODFALL_ATTEMPTS` 30 → 160
-  - `GODFALL_ATTEMPTS_INSANE` 80 → 420
-  - Concorrência por fase elevada (96 / 160 / 256 / 384 no normal; até 512 no insane)
-  - Abort thresholds afrouxados para permitir saturação real:
-    - `GODFALL_ABORT_LOSS_PCT` 60 → 92
-    - `GODFALL_ABORT_LATENCY_MULT` 3 → 8
-    - `GODFALL_ABORT_SUCCESS_PCT` 35 → 4
-  - Janela de recovery estendida (60s → 90s, alvo 1.3x → 1.5x baseline)
-- Nova fase apex **TITANFALL** adicionada ao final de `GODFALL_PHASES` e `GODFALL_PHASES_INSANE` (multiplier 3.5x / 5.0x, delay 0).
-- Cada fase agora tem campo `barrage` (tier 0-4) que dispara, **em paralelo** ao benchmark assíncrono por host:
-  - `GODFALL_BARRAGE_THREADS_PER_TIER = 28` threads UDP raw (payloads 65507 / 4096 / 512 alternados, 14 portas-chave + porta randômica, broadcast habilitado)
-  - `GODFALL_TCP_SWARM_PER_TIER = 64` threads de TCP connect-and-close
-  - Coordenação via `threading.Event` para parada limpa ao final de cada fase
-  - Contador global `barrage_pkt_counter` agregando pacotes UDP enviados
-- `run_host_phase` reescrito de loop sequencial (com `await sleep` serializando) para batch via `asyncio.gather`, saturando de fato a concorrência da fase.
-- Telemetria nova no `results["godfall"]`:
-  - `barrage_tier` e `barrage_packets` por fase
-  - `barrage_packets_total` agregado
-- `--godfall` no argparse atualizado descrevendo as 4 fases e a barragem multi-vetorial.
-
-No tier 4 (TITANFALL insane): 112 threads UDP + 256 threads TCP rodando concorrentemente com até 512 conexões assíncronas por host — supera os 100 threads UDP do `--flood` e ainda preserva métricas por host, abort automático, recovery window e relatórios HTML/TXT.
-
-Validação:
-- `python -m py_compile NetDroid.py` executado com sucesso.
-- `python NetDroid.py --version` executado com sucesso.
-
-### Upgrade Colossal — v1.1.0 (2026-04-27)
-
-Refatoração ampla seguindo o plano `claudinho-meu-lindo-me-wiggly-zephyr.md`. Foco: deixar `--discover`, `--Insane`, `--god`, `--godfall` em nível militar, consolidar todo DOS dentro de `--godfall`, corrigir URL do upgrade, manter código em PT-BR.
-
-**Constantes / capabilities**
-- `VERSION` 1.0.0 → **1.1.0**.
-- `GITHUB_RAW_URL` / `GITHUB_VERSION_URL` → `github.com/yamotoz/NetDroid`.
-- Nova flag `HAS_NMAP_BIN = bool(shutil.which("nmap"))` (separada do módulo python-nmap).
-
-**Bancos globais expandidos**
-- `MAC_VENDORS`: 48 → **140+** prefixos (Xiaomi, Tenda, ZTE, Google/Nest, Amazon, Sony, LG, Netgear, Aruba, Ruckus, Ubiquiti, Roku, Sonos, Wyze, Eufy, Synology, QNAP, impressoras HP/Epson/Brother/Canon/Kyocera, câmeras Axis/Foscam/Reolink/Amcrest, Grandstream).
-- `SERVICE_MAP`: 43 → **110+** (Modbus 502, BACnet 47808, DICOM 104, EthernetIP 44818, CoAP 5683, MQTTS 8883, jogos 25565/27015, infra industrial, IoT, NAS, Kubernetes 6443, Vault 8200, Consul 8500, Cassandra 9042, etc.).
-- `DEFAULT_CREDS`: 10 → **15+** vendors (Xiaomi, Tenda, ZTE, Ubiquiti, Axis, Foscam, Reolink, Amcrest, Netgear, Synology, QNAP, Intelbras, Fortinet).
-- `RTSP_PATHS`: 12 → **35+** (Hikvision, Dahua, Axis, Ubiquiti, Foscam, Amcrest, Reolink, ONVIF).
-- `API_ENDPOINTS`: 10 → **30+** (Swagger/GraphQL/ISAPI/PSIA/axis-cgi/Synology/QNAP/HNAP1, .git, .env, /manager/html).
-- Novo `DEVICE_FINGERPRINTS`: lista global com **50+ assinaturas** (vendor + marker + tipo) — usada por `HostDiscovery._classificar_dispositivo` e `GodMode._fingerprint_device`.
-- Novo `VULN_DB`: dict porta → list[{servico, regex, dica, severidade}] com 30+ portas e ~80 assinaturas (severidades `critica`/`alta`/`media`/`info`).
-- Novo `DEVICE_HEURISTICS`: regras ordenadas para classificação `roteador|camera_ip|impressora|nas|voip|windows_pc|linux_servidor|mobile|iot_generico|desconhecido`.
-
-**Upgrader**
-- Método `_fetch()` com até 3 tentativas + backoff e User-Agent.
-- Validação pré-overwrite: tamanho mínimo (10 KB) + checagem de strings `NetDroid` e `def main_async`.
-- Mensagens em PT-BR.
-
-**HostDiscovery (--discover militar)**
-- Novos métodos: `_consultar_mdns`, `_consultar_netbios`, `_sondar_ssdp`, `_banner_smb`, `_coletar_http`, `_nmap_os`, `_ler_dhcp_leases`, `_classificar_dispositivo`, `_calcular_confianca`, `_enriquecer_hosts` / `_enriquecer_host_unico`.
-- Modelo de host expandido: `hostname`, `device_type`, `fontes` (lista de origens: arp/ttl/mdns/netbios/ssdp/smb/http/nmap/dhcp), `confiancas` (dict 0–100 por campo), `vulns`, `extra` (metadata SSDP/HTTP/SMB).
-- Fluxo: ARP → ping → TCP probe → enriquecimento paralelo → classificação → score de confiança.
-- Tabela CLI nova com colunas `Hostname, Tipo, Conf.`.
-
-**PortScanner (--Insane com avaliação de vulns)**
-- Novo método `_avaliar_vulns(host)` chamado automaticamente quando `insane=True`.
-- Helpers: `_auditar_headers_http` (ausência de X-Frame-Options/CSP/HSTS/X-Content-Type-Options/Referrer-Policy + cookies suspeitos + servidor antigo), `_verificar_ssh_versao` (CVE-2018-15473 e correções 8.5+), `_telnet_ftp_banner` (ProFTPD 1.3.3c, vsftpd 2.3.4).
-- Output: nova tabela "Vulnerabilidades Identificadas (Insane)" com severidade.
-
-**GodMode (--god aprofundado)**
-- `_fingerprint_device` agora consome `DEVICE_FINGERPRINTS` global (50+).
-- Novos probes: `_sondar_servicos_amplificacao` (SNMP `public` GetRequest, NTP monlist mode 7, DNS `version.bind` CHAOS) e `_sondar_paths_default` (phpmyadmin, wp-admin, manager/html, .git/config, .env, server-status, HNAP1).
-- `_assess_risks` ampliado com SNMP/DNS/NTP/Redis/Mongo/Elastic/Docker, paths default, amplificação e absorção de vulns do PortScanner. Mensagens em PT-BR.
-
-**StressEngine (consolidação --godfall)**
-- Removidos do parser: `--overfull`, `--overflow`, `--flood`, `--slowloris`, `--rtsp-kill`, `--mirai`.
-- Removidos do código: `run_overfull`, `run_flood`, `run_overflow` (helpers `_tcp_flood`/`_udp_storm`/`_http_storm`/`_run_iperf` mantidos como utilitários internos do godfall).
-- `--godfall` ganhou:
-  - **RECON iperf3** baseline (TCP+UDP) absorvido do antigo overflow.
-  - Novo argumento de ctor `infinito` (vindo de `--infinite`).
-  - **Modo eterno**: quando `--infinite` é combinado com `--godfall`, a fase TITANFALL roda em loop até `KeyboardInterrupt`/`CancelledError`, com contador de ciclos e pacotes em tempo real.
-  - `results["godfall"]` ganha `modo` ("infinito"/"fases") e `baseline_iperf`.
-
-**Parser & main_async**
-- `has_action` reduzido a `[discover, normal, Insane, stealth, ports, god, godfall, onvif]`.
-- Helper `_host_vazio()` cria host com modelo expandido para casos sem `--discover`.
-- Help/argparse 100% em PT-BR; exemplos atualizados.
-
-**ReportEngine**
-- HTML: tabela de hosts ganhou `Hostname`, `Tipo` (badge colorido por tipo), `Conf.`, `Risk`, `Fontes`. Novo card `Vulnerabilidades` com badges de severidade. Card `Godfall` mostra modo, baseline iperf3, barragem por fase + total. CSS expandido com classes `.badge.tipo-*` e `.badge.sev-*`.
-- TXT: blocos `Hostname`, `Tipo`, `Fontes`, `Vuln [SEV]` por host; novas seções `=== VULNERABILIDADES ===`, `=== TOP RISCOS ===`, `=== GODFALL TITAN SWEEP (modo) ===` e `=== RANKING DE RESILIÊNCIA ===`.
-
-**Validação final**
-- `python -m py_compile NetDroid.py` ok.
-- `python NetDroid.py --version` ok (imprime `v1.1.0`).
-- `python NetDroid.py --help` ok (parser limpo, sem flags removidas, com `--infinite`).
-
-### Apex Privilege + Kamikase — v1.2.0 (2026-04-27)
-
-Implementação completa do plano `claudinho-meu-lindo-me-wiggly-zephyr.md` (sessão de privilégio). Foco: explodir capacidade exponencialmente quando `--root` ativo, e adicionar módulo dedicado de stress 802.11 (`--kamikase`).
-
-**Decisões fechadas (confirmadas pelo usuário antes da implementação):**
-- Uma única flag `--root` que auto-detecta SO (Windows Admin / Linux root / Termux su). Sem flags separadas.
-- Scapy é **opcional** (try-import); fallback para subprocess `aireplay-ng`/`mdk4`/`tcpdump`/`iw`/`netsh`.
-- `--kamikase` no Windows é implementado com NPCAP+scapy + warning honesto sobre instabilidade do monitor mode.
-
-**Constantes / capabilities adicionadas:**
-- `VERSION` 1.1.0 → **1.2.0**.
-- `HAS_SCAPY` (try-import scapy + 802.11 layers).
-- `IS_TERMUX` e `IS_LINUX`.
-- 11 capability flags em runtime: `HAS_AIREPLAY`, `HAS_AIRMON`, `HAS_MDK4`, `HAS_TCPDUMP`, `HAS_IW`, `HAS_IWCONFIG`, `HAS_ARPSCAN`, `HAS_IPTABLES`, `HAS_NETSH`, `HAS_PKTMON`, `HAS_POWERSHELL`, `HAS_SU`.
-- `GODFALL_PHASES_ROOT` e `GODFALL_PHASES_ROOT_INSANE` — multipliers de até 8.0x e concorrência até 1024.
-- `CONCURRENT_LIMIT_ROOT = 2048` (vs 500 user-space).
-- `THERMAL_LIMITE_REDUZIR = 70°C`, `THERMAL_LIMITE_ABORTAR = 80°C` (Termux).
-- `SNMP_COMMUNITIES_ROOT` com 40+ entradas (vs 13 padrão).
-
-**Classe nova `ContextoPrivilegio`:**
-- `detectar_e_validar(ui)` retorna instância ativa ou None.
-- Validação por motor: `ctypes IsUserAnAdmin()` (Windows), `os.geteuid()==0` + raw socket test (Linux), `su -c id` retornando uid=0 (Termux).
-- `_descobrir_capabilities()` preenche set com base em binários disponíveis e plataforma.
-- Banner de boot mostra plataforma, motor, capabilities, e dicas de instalação para o que falta.
-- Helpers globais `priv_ativo()` e `tem_cap(c)` consultam variável global `ctx_priv`.
-- `temperatura_cpu()` lê `/sys/class/thermal/thermal_zone0/temp` para thermal guard.
-
-**`HostDiscovery` boost root:**
-- `_enriquecer_root(host)` chamado adicionalmente a `_enriquecer_host_unico` quando `priv_ativo()`.
-- `_raw_icmp_echo`: socket raw ICMP type 8 com checksum Internet, mede TTL e RTT.
-- `_inferir_os_por_ttl`: TTL ≤ 64 = Linux/Android, ≤ 128 = Windows, > 128 = Network device.
-- `_raw_arp_probe`: scapy `srp(Ether/ARP)` para ARP active probe.
-- `_syn_fingerprint`: scapy `IP/TCP(flags="S")` com análise TTL+window+MSS para palpite refinado de OS.
-
-**`PortScanner` boost root:**
-- `_tcp_scan` agora roteia para `_tcp_scan_raw_syn` quando `priv_ativo() and tem_cap("scapy")`.
-- `_tcp_scan_raw_syn`: scapy SYN scan stealth (sem 3-way handshake), em chunks de 1024 portas via executor, com RST após SYN/ACK para fechar limpo.
-- `CONCURRENT_LIMIT_ROOT` (2048) usado em vez de 500 quando root.
-- Batch elevado para 1024 (vs 500) sob root.
-- Thermal guard em Termux: reduz para 256 com >70°C, aborta com >80°C.
-
-**`GodMode` boost root:**
-- `_upgrade_root()` chamado de `run()` antes de `_assess_risks` quando `priv_ativo()`.
-- `_snmp_mass`: testa `SNMP_COMMUNITIES_ROOT` (40+) e grava em `host["snmp_creds"]` + `host["root_findings"]`.
-- `_dns_cache_snoop`: query DNS RD=0 em domínios populares (google.com, facebook.com, youtube.com, etc.); ANCOUNT>0 = cacheado.
-- `_sniff_lldp_cdp`: scapy sniff filtrando frames `01:80:c2:00:00:0e` (LLDP) e `01:00:0c:cc:cc:cc` (CDP) por 15s.
-- `_tcpdump_arp_spoof`: subprocess tcpdump por 10s, detecta IPs com mais de um MAC.
-- `_assess_risks` ampliado para absorver `root_findings` com pesos (alta=25, media=12, info=5).
-
-**`StressEngine` boost root:**
-- `run_godfall` usa `GODFALL_PHASES_ROOT*` quando `priv_ativo()`, com `base_attempts × 1.6`.
-- `_spawn_titan_flood_raw`: SYN flood scapy com IPs source aleatórios, threads adicionais à barragem UDP/TCP existente, ativado para tier ≥ 2.
-
-**Classe nova `KamikaseEngine` (~520 linhas):**
-- `_validar_pre_requisitos`: detecta interface WiFi (netsh / iw / wlan0), exige aireplay/mdk4/scapy disponível, warning honesto no Windows.
-- `_consent_duplo`: banner vermelho + aviso legal (Lei 12.737/2012, CFAA) + prompt EXIGE digitação literal "EU AUTORIZO".
-- `_descobrir_aps`: motor híbrido — `netsh wlan show networks mode=bssid` (Windows), `iw dev <iface> scan` (Linux), `termux-wifi-scaninfo` (Termux), fallback scapy Beacon sniff 8s.
-- `_setup_monitor`: `airmon-ng start` (Kali), `iw set type monitor` (Termux), no-op no Windows (NPCAP injeta direto).
-- `_atacar_bssid`: thread por BSSID rodando `aireplay-ng -0 0 -a BSSID`, parse stdout para contar deauths; fallback scapy `Dot11Deauth` em loop.
-- Contador thread-safe (`threading.Lock`) — global e por BSSID.
-- `_loop_ui_live`: print no mesmo lugar a cada 1s mostrando tempo, total, PPS, BSSIDs ativos.
-- `_encerrar_limpo`: terminate subprocess + join threads + restaurar `airmon-ng stop` ou `iw set type managed` + audit log final.
-- `kamikase_audit.log` append-only no `output_dir`: timestamp ISO, plataforma, motor, interface, BSSIDs alvos, comando completo, total de pacotes, motivo do encerramento.
-
-**Parser e `main_async`:**
-- Novas flags `--root` e `--kamikase` com helps detalhados em PT-BR.
-- `--kamikase` sem `--root` → erro.
-- `--kamikase` sozinho não exige target (opera no chip WiFi local); criação de output dir fallback se `detector.detect()` falhar.
-- `has_action` inclui `args.kamikase`.
-- Branch `if args.root: ctx_priv = ContextoPrivilegio.detectar_e_validar(ui)` antes de discover.
-- Branch `if args.kamikase: KamikaseEngine(ui, ctx_priv, detector).run()` antes do report.
-
-**`ReportEngine` v1.2:**
-- `__init__` aceita `kamikase_data` e `ctx_priv` como kwargs.
-- Novo card HTML `Privilege Mode — Apex Militar` no topo (após topology) — plataforma, motor, capabilities como badges, didática expandível.
-- Novo card HTML `⚡ Kamikase Death Toll ⚡` ao lado do godfall — totais, PPS médio, motivo encerramento, audit log path, tabela ESSID/BSSID/Canal/RSSI/Pacotes, didática expandível.
-- Ordem: privilege → vuln → cred → risk → godfall → kamikase → lat.
-- TXT: nova seção `=== PRIVILEGE MODE — MOTOR ===` e `=== ⚡ KAMIKASE DEATH TOLL ⚡ ===` antes do glossário.
-- 5 entradas novas em `EXPLICACOES`: `privilegio_root`, `arp_spoofing_detect`, `lldp_cdp`, `dns_snooping`, `kamikase` — cada uma com resumo, como_validar, impacto.
-- `_coletar_chaves_explicacao` detecta `root_findings` por tipo e adiciona ao glossário só os que apareceram.
-
-**README v1.2:**
-- Banner atualizado para v1.2.0 + badge "Root: Optional (Apex Mode)".
-- Nova seção "🔥 Modo Root (--root) — Apex Militar" com matriz de motor por SO, boosts por módulo, lista de capabilities opcionais e comandos de instalação.
-- Nova seção "⚡ --kamikase — Deauth Flood 802.11" com **aviso legal destacado** (Lei 12.737/2012, CFAA, GDPR), uso autorizado, fluxo (consent duplo + audit log), exemplos e limitações honestas por SO.
-
-**Validação:**
-- `python -m py_compile NetDroid.py` ok.
-- `python NetDroid.py --version` retorna `v1.2.0`.
-- `python NetDroid.py --help` mostra `--root` e `--kamikase` com helps PT-BR + 2 exemplos novos.
-- Smoke test report engine completo com `ctx_priv` + `kamikase_data` simulados: HTML 13.7 KB com cards Privilege Mode e Kamikase Death Toll; TXT 10 KB com seções dedicadas e glossário ampliado (`arp_spoofing_detect`, `lldp_cdp`, `dns_snooping`, `kamikase`, `privilegio_root`).
-
-### Simplificação Cirúrgica — v1.3.0 (2026-04-27)
-
-Reorganização major do CLI seguindo pedido do usuário: **3 modos apenas** (`--god`, `--godfall`, `--kamikase`) + booster `--root`. Todas as flags antigas de scan/discovery foram absorvidas.
-
-**Decisão arquitetural:**
-- Filosofia "uma flag, um verbo" — usuário não precisa saber quais sub-flags combinar.
-- `--god` é o pacote completo de **reconhecimento** (descoberta + scan total + auditoria).
-- `--godfall` é o pacote completo de **ataque** (subnet inteira ou hosts descobertos pelo --god).
-- `--kamikase` é o pacote completo de **deauth WiFi** (já era dedicado).
-
-**Removidas do parser:**
-- `--discover` → absorvida pelo `--god` (Fase 1/3 automática).
-- `--Insane` → absorvida pelo `--god` (Fase 2/3 sempre em modo insane).
-- `--normal` → removida (era redundante com Insane absorvida).
-- `--stealth` → removida (caso de uso muito específico, baixa demanda).
-- `--ports` → removida (sem necessidade real fora de pentest cirúrgico).
-- `--onvif` → absorvida pelo `--god` (já era parte do GodMode.run()).
-
-**CLI final (apenas 8 flags):**
-```
---auto, --t TARGET    (alvo)
---god                 (reconhecimento total — 3 fases)
---godfall [--infinite] (ataque colossal a todos os hosts)
---kamikase            (deauth WiFi — exige --root)
---root                (booster apex)
---upgrade, --version  (utilidades)
+```python
+VERSION = "1.5.2"
+DASHBOARD_HOST = "127.0.0.1"
+DASHBOARD_PORT = 5556
+WORDLIST_DIR = Path("WordList")
+HANDSHAKE_DIR = Path("handshakes")
+PASS_DIR = Path("Pass")
+IMPORTS_DIR = Path("imports")
+DEAUTH_THREAD_LIMIT = 8              # semáforo anti-explosion
+CONTINUOUS_SCAN_INTERVAL_SEC = 6     # cadência do scan contínuo
+CHANNEL_HOP_INTERVAL_MS = 250        # tempo em cada canal
+HANDSHAKE_RETRY_FOREVER = True       # captura handshake nunca desiste
 ```
 
-**Mudanças no `main_async`:**
-- `has_action = any([args.god, args.godfall, args.kamikase])` (vs antes: 9 flags).
-- `if args.god:` agora roda em sequência: `HostDiscovery` → `PortScanner(insane=True)` → `GodMode.run()`. Cada fase com seu `ui.section("FASE N/3 — ...")` para feedback claro.
-- `if args.godfall and not args.god`: usa fallback de subnet inteira (254 IPs) para spray colossal.
-- `if args.godfall and args.god`: ataca apenas os hosts vivos descobertos.
-- `args.Insane` removido como condicional separada — sempre `True` quando `--god` ativo.
+### Capability flags (detectadas via `shutil.which`)
+`HAS_AIREPLAY`, `HAS_AIRMON`, `HAS_AIRODUMP`, `HAS_AIRCRACK`, `HAS_HCXDUMPTOOL`, `HAS_HCXPCAPNGTOOL`, `HAS_HASHCAT`, `HAS_MDK4`, `HAS_TCPDUMP`, `HAS_IW`, `HAS_IWCONFIG`, `HAS_ARPSCAN`, `HAS_IPTABLES`, `HAS_NETSH`, `HAS_PKTMON`, `HAS_POWERSHELL`, `HAS_SU`, `HAS_SCAPY`.
 
-**Estado dos cards/relatórios:**
-- HTML/TXT inalterados em estrutura — todos os cards (`Privilege Mode`, `Inventário`, `Vulnerabilidades`, `Credential Hunting`, `Risk Findings`, `Godfall`, `Kamikase`, `Latência`) continuam aparecendo conforme o modo executado.
-- O glossário didático continua se adaptando ao que foi encontrado.
+### Lookup tables 802.11 ([NetDroid.py:182-198](NetDroid.py#L182))
+`CHANNEL_TO_FREQ_24/_5/_6/_ALL`, `FREQ_TO_CHANNEL_ALL` — usadas em `_normalizar_ap` para cross-fill canal↔freq quando uma fonte só tem um lado. Elimina campos `?` em runtime.
 
-**README v1.3.0:**
-- Reescrito do zero com seção "Filosofia" (3 verbos), tabela de fases do `--god`, descrição do ataque colossal do `--godfall` (subnet inteira sem `--god` vs hosts vivos com `--god`), comportamento do `--kamikase` por SO.
-- Aviso legal mantido em quote blocks para `--godfall` e `--kamikase`.
+---
 
-**Validação:**
-- `python -m py_compile NetDroid.py` ok.
-- `python NetDroid.py --version` → `v1.3.0`.
-- `python NetDroid.py --help` mostra apenas 8 flags com helps PT-BR + 7 exemplos.
-- `python NetDroid.py` (sem args) → mensagem clara listando os 3 modos disponíveis.
+## 4. Classes e responsabilidades
 
-### Dashboard C2 Live — v1.4.0 (2026-04-28)
+| Classe | Linha | O que faz |
+|---|---|---|
+| `ContextoPrivilegio` | 1300 | Decide motor (`adm` Win, `root-kali`, `root-termux`) e capabilities |
+| `TerminalUI` | 1492 | Banner cyberpunk + log colorido (rich) |
+| `NetworkDetector` | 1623 | Identifica iface, gateway, ASN, OUI |
+| `HostDiscovery` | 1802 | ARP scan / ping sweep |
+| `PortScanner` | 2514 | Async TCP/SYN + nmap fallback |
+| `LatencyMonitor` | 2904 | iperf3 + jitter |
+| `StressEngine` | 2969 | SYN/ARP/UDP flood (`--godfall`) |
+| **`KamikaseEngine`** | **3576** | **Coração do `--kamikase --live`** — vê seção 5 |
+| `EventBus` | 5271 | Wrapper para SocketIO emit thread-safe |
+| `WifiSecurityAuditor` | 5317 | Score 0-100 + achados (WEP/TKIP/WPS/RSSI alto) |
+| **`PMKIDCapture`** | **5376** | **Captura handshake** — vê seção 6 |
+| `MemoriaPersistente` | 5616 | JSON-based local storage cross-session |
+| `WordlistContextual` | 5843 | Gera variações baseadas em ESSID/BSSID/data |
+| `HashcatWorker` | 5973 | Fila + processo hashcat com parser de progresso |
+| **`LiveDashboard`** | **6307** | **Flask + SocketIO** — endpoints e templates |
+| `ZonaExporter` | 8286 | Export PDF+TXT por zona |
+| `PDFReport` | 8490 | Relatório executivo via reportlab |
+| `GodMode` | 8595 | Pipeline auditoria + relatório (`--god`) |
+| `ReportEngine` | 9536 | Markdown report final |
+| `Upgrader` | 10286 | Auto-update via git pull |
 
-Implementação completa do painel web em tempo real (`--live`) para `--god` e `--kamikase`. Foco em uso autorizado em Kali Linux.
+---
 
-**Arquitetura:**
-- Flask + Flask-SocketIO em thread daemon, host fixo `127.0.0.1:5556`.
-- Templates HTML embutidos como strings Python (mantém single-file): `TEMPLATE_GOD` e `TEMPLATE_KAMIKASE`.
-- TailwindCSS + Chart.js + SortableJS via CDN para visual luxuoso sem build step.
-- Tema cyberpunk preto/vermelho/branco, modo escuro padrão, glass morphism, scan lines, pulse glow nos cards de ataque.
-- Browser abre automaticamente via `webbrowser.open()`.
+## 5. KamikaseEngine — fluxo do `--kamikase --live`
 
-**Classes novas (~900 linhas adicionadas):**
-- `EventBus` (singleton global `event_bus`) — desacopla módulos do canal de transporte; queue de 500 eventos pré-conexão; helper `emitir(nome, **dados)`.
-- `WifiSecurityAuditor` — score 0–100 + achados estruturados: detecta WPS, WEP/TKIP legacy, beacon interval anômalo, RSSI excessivo (vazamento de perímetro).
-- `PMKIDCapture` — primário hcxdumptool focado (25s), fallback airodump+aireplay (deauth burst para forçar handshake).
-- `HashcatWorker` — fila thread única, converte pcapng→22000 via hcxpcapngtool, roda hashcat com perfis (low/medium/high/nuclear), parse de progress + ETA em tempo real, emite `hashcat_start`/`progress`/`done`.
-- `LiveDashboard` — Flask app, rotas `/`, `/api/estado`, `/api/wordlists`, `/api/perfis_hashcat`, handler `mover_zona` para drag-drop.
-- `PDFReport` — reportlab, gerado ao final de `--god`/`--kamikase` com tema vermelho/preto, tabelas de hosts/vulns/kamikase.
+Construtor em [NetDroid.py:3580](NetDroid.py#L3580). Estado relevante:
+- `self.alvos: List[Dict]` — APs descobertos (1 por BSSID, normalizado uppercase)
+- `self.zonas: Dict[str, List[str]]` — `verde` (descobertas), `vermelha` (deauth ativo), `azul` (handshake+crack)
+- `self.zonas_lock`, `self.contador_lock` — mutexes
+- `self.deauth_threads: Dict[bssid, Thread]`, `self.deauth_stops: Dict[bssid, Event]`
+- `self.deauth_semaforo = BoundedSemaphore(8)` — anti-explosion (8 threads max)
+- **`self.capture_stops: Dict[bssid, Event]`** — controle das capturas de handshake
+- `self.scan_continuo_*` — controla thread de scan e channel hopper
+- `self.iface_orig` / `self.iface_monitor` — antes/depois do airmon-ng
 
-**Capabilities/constants novas:**
-- `HAS_FLASK`, `HAS_REPORTLAB`, `HAS_HCXDUMPTOOL`, `HAS_HCXPCAPNGTOOL`, `HAS_HASHCAT`, `HAS_AIRODUMP`.
-- `DASHBOARD_HOST = 127.0.0.1`, `DASHBOARD_PORT = 5556`, `DASHBOARD_SECRET`.
-- `WORDLIST_DIR = Path("WordList")`, `HANDSHAKE_DIR = Path("handshakes")`.
-- `HASHCAT_PROFILES`: low/medium/high/nuclear com workload 1-4.
+### Boot do `--live` ([_run_live](NetDroid.py#L3663))
+1. Carrega memória (cross-session APs, senhas)
+2. **`_setup_monitor()` ANTES do scan** (crítico: sem monitor, scan só vê ~25% das redes)
+3. `_descobrir_aps()` — varredura inicial via nmcli/iw/scapy
+4. Audita cada AP, restaura senha/handshake da memória, joga na zona verde
+5. **`iniciar_scan_continuo()`** — auto-inicia loop de scan + channel hopper
+6. Inicia `HashcatWorker` e `PMKIDCapture` em standby
+7. Heartbeat: emite `pacotes_total` 1×/s
 
-**Hooks `--god --live`:**
-- `HostDiscovery.discover()` emite `fase` no início, `host_found` por host descoberto, `host_update` após enriquecimento.
-- `PortScanner.scan_all()` emite `fase` no início.
-- `PortScanner.scan_host()` emite `host_update` após scan, `vuln_found` por vulnerabilidade detectada.
-- `GodMode.run()` emite `fase`. Sob `--live`, pula consent (já dado pela escolha de modo).
+### Setup monitor ([_setup_monitor](NetDroid.py#L4900))
+1. `airmon-ng check kill` (mata NetworkManager/wpa_supplicant)
+2. `airmon-ng start <iface>`
+3. Detecta nome real via `iw dev` → grep `type monitor`
+4. Valida com `/sys/class/net/<iface>` antes de aceitar
+5. Fallback: `iw dev <iface> set type monitor` + `ip link set up`
 
-**Hooks `--kamikase --live`:**
-- `KamikaseEngine.__init__` ganha `live: bool` + estado de zonas (`verde`/`vermelha`/`azul`), `deauth_threads`/`deauth_stops` por BSSID, `hashcat_worker`, `pmkid`.
-- `KamikaseEngine.run()` roteia para `_run_live()` se `live=True`.
-- `_run_live()`: descobre APs → audita cada um (WifiSecurityAuditor) → popula zona verde → emite `ap_descoberto` → setup monitor mode → loop heartbeat emitindo `pacotes_total`.
-- `mover_para_zona(bssid, destino, perfil, wordlist)`:
-  - Se entra na vermelha: spawna thread `_loop_deauth_zona` que envia 1 frame deauth a cada 0.5s (aireplay-ng primário, scapy fallback) e incrementa contadores.
-  - Se sai da vermelha: seta stop_event, thread encerra graciosamente.
-  - Se entra na azul: spawna captura assíncrona PMKID → enfileira no HashcatWorker.
+### Scan contínuo ([_loop_scan_continuo](NetDroid.py#L3877))
+- Roda `remapear_redes()` a cada `CONTINUOUS_SCAN_INTERVAL_SEC` (6s)
+- `remapear_redes` ([3743](NetDroid.py#L3743)) tenta nmcli → iw → scapy nessa ordem, mescla via `_mesclar_aps`, dedup absoluto por BSSID
+- **Channel hopper paralelo** ([_loop_channel_hopper](NetDroid.py#L3893)): `iw set channel` rotacionando 1-13 + 36/40/44/48/52/56/60/64/100-140/149-165 a cada 250ms. **Pausa quando há captura ativa** (`capture_stops` não-vazio) para não tirar a iface do canal do AP-alvo da zona azul.
 
-**Templates HTML:**
-- `TEMPLATE_GOD` (~280 linhas): header com logo "NETDROID" + tag "GOD · C2 LIVE" pulsante, 4 stat cards, inventário de hosts expansíveis, 2 pie charts (tipos + severidades), feed de vulns colorido, log em tempo real.
-- `TEMPLATE_KAMIKASE` (~310 linhas): header com tag "KAMIKASE · C2 LIVE", contador global + PPS, 3 zonas drag-and-drop com SortableJS, modal de configuração de crack (perfil + wordlist), pie chart das 3 zonas, log em tempo real. Cards animados (pulse-red para deauth, pulse-blue para crack).
+### Movimentar AP entre zonas ([mover_para_zona](NetDroid.py#L3915))
+Disparado pelo websocket `mover_zona`:
+- Sai da `vermelha` → seta `deauth_stops[bssid]`, join, pop
+- Sai da `azul` → seta `capture_stops[bssid]` (cancela handshake limpo)
+- Entra `vermelha` → valida `iface_monitor`, spawna `_loop_deauth_zona` com semáforo
+- Entra `azul` → chama `_iniciar_crack_async` (captura handshake → enfileira hashcat)
 
-**Pasta `WordList/`:**
-- Criada com `comum.txt` (28 senhas frequentes em PT-BR para teste em rede própria).
-- Dashboard lista automaticamente todos os `.txt` da pasta no modal de crack.
+### Loop deauth ([_loop_deauth_zona](NetDroid.py#L3989))
+- Adquire semáforo (timeout 5s, desiste se cheio)
+- Loop while not stop_event:
+  - `aireplay-ng -0 1 -a <bssid> <iface_monitor>` (1 pkt)
+  - Fallback scapy `RadioTap()/Dot11()/Dot11Deauth(reason=7)` se aireplay timeout
+  - Incrementa contadores, emite `ap_update`
+  - **`stop_event.wait(0.2)`** — 200ms entre frames (5 pkt/s sustentado por BSSID)
+- Finally: termina subprocess, libera semáforo
 
-**Arquivos novos:**
-- `requirementskali.txt` — dependências Python + lista de pacotes APT (`aircrack-ng mdk4 hcxdumptool hcxtools hashcat tcpdump arp-scan iw nmap iperf3 iptables`) + comandos de verificação.
-- `WordList/comum.txt` — wordlist default em PT-BR.
+---
 
-**`requirements.txt` reescrito:**
-- Adicionadas: `scapy`, `python-nmap`, `flask`, `flask-socketio`, `python-socketio`, `python-engineio`, `simple-websocket`, `reportlab` (todas obrigatórias).
+## 6. PMKIDCapture — captura cirúrgica de handshake
 
-**Parser:**
-- Nova flag `--live`. Validação: só funciona com `--god` ou `--kamikase` (erro caso contrário).
+Versão atual ([NetDroid.py:5461-5615](NetDroid.py#L5461)) usa **estratégia única**, escolha do usuário:
 
-**main_async:**
-- Após validar privilégio, instancia `LiveDashboard(modo)` se `--live` presente.
-- Quando `--kamikase --live`: injeta `kami` no `dashboard.kami_engine` para callbacks de drag-drop funcionarem.
-- PDF executivo gerado ao final automaticamente.
-- Modo `--god --live` (sem kamikase): aguarda Ctrl+C para manter dashboard ativo após scan terminar.
+### `capturar_infinito(bssid, canal, stop_event, on_tentativa)`
+1. **Trava canal** via `iw dev <iface> set channel <canal>` (sem isso o channel hopper sabota)
+2. Sobe `airodump-ng --bssid <BSSID> --channel <C> -w <arq> --output-format cap <iface>` em background (Popen) — **escuta contínua**, não derruba entre tentativas
+3. Loop até stop_event ou pegar:
+   - Burst `aireplay-ng -0 30 -a <BSSID> <iface>` (30 deauths broadcast)
+   - Sleep 8s (tempo do cliente reconectar e aparecer EAPOL)
+   - `_cap_tem_handshake(cap_file, bssid)`:
+     - Tenta `aircrack-ng -a2 -w /dev/null -b <BSSID> <cap>` → regex `(\d+) handshake` ≥ 1
+     - Fallback scapy: `rdpcap` + conta EAPOL com `bssid in (addr1,addr2,addr3)` ≥ 2
+     - Final: `cap_size > 24KB` heurística
+4. Finally: termina airodump
 
-**Validação:**
-- `python -m py_compile NetDroid.py` ok.
-- `python NetDroid.py --version` → `v1.4.0`.
-- `python NetDroid.py --help` mostra 9 flags incluindo `--live`.
+**Cancelamento limpo**: `stop_event` é setado por `mover_para_zona` quando AP sai da azul.
 
-### Iteração v1.4.0 — Wordlist Contextual + Bulk Move + Visual Kill (2026-04-28)
+⚠️ Estratégias antigas (hcxdumptool focado/broadcast, scapy puro, airodump-burst-curto) foram **removidas em v1.5.2** porque o usuário preferiu uma única estratégia bem afinada. NÃO reintroduzir sem instrução explícita.
 
-Refinamento do dashboard `--kamikase --live` após review do usuário:
+---
 
-**Perfis hashcat renomeados:**
-- `nuclear` → `insane` (label "🔴 INSANE — 100% GPU descontrolado")
-- `high` → `hard` (label "🟠 HARD — pesado, ~90% GPU")
-- Mantidos: `low` (🟢) e `medium` (🟡). Total: low/medium/hard/insane.
+## 7. Dashboard Live — endpoints
 
-**Nova classe `WordlistContextual`:**
-- Estática, gera 500-1000 variações por ESSID com filtro WPA2-PSK (8-63 chars).
-- Bases: original + lowercase + UPPERCASE + Capitalize + leet speak (a/e/i/o/s/t).
-- Detecta camelCase via regex (`[A-Z]?[a-z]+|[A-Z]+|\d+`) e expande partes individuais.
-- Combinatorial: bases × {41 sufixos numéricos, 17 anos 2010-2026, 25 símbolos, 11 prefixos genéricos}.
-- Variações extras: reverso, duplicado.
-- Ordena por probabilidade: 8-12 chars primeiro (mais comum em residencial), depois 13-16, depois 17+.
-- `WordlistContextual.gerar_arquivo(essid, base_wordlist)` cria `./WordList/_contextual_<essid>.txt` com header de metadata + variações + wordlist base concatenada.
-- Validado: `Casa01` → 1000 variações geradas (incluindo `c45401` leet, `casa01@2024`, etc.).
+Em `LiveDashboard` ([NetDroid.py:6307](NetDroid.py#L6307)). Templates HTML são strings r"""...""" no final do arquivo: `TEMPLATE_GOD` (~6378), `TEMPLATE_KAMIKASE` (~6777).
 
-**HashcatWorker integrado:**
-- `enfileirar` aceita `contextual: bool = True` (default ON).
-- `_processar` chama `WordlistContextual.gerar_arquivo` e usa o arquivo combinado como `wordlist` final do hashcat.
-- Item da fila ganha `contextual_count` (qtde de variações geradas) e `wordlist_efetiva` (nome do arquivo `_contextual_*`) para exibir no card.
+### REST
+| Rota | Método | Função |
+|---|---|---|
+| `/` | GET | renderiza template (god ou kamikase) |
+| `/api/estado` | GET | snapshot de `dash.estado` |
+| `/api/wordlists` | GET | lista `./WordList/*.txt` |
+| `/api/perfis_hashcat` | GET | low/medium/high/extreme |
+| `/api/rescan` | POST | `remapear_redes(profundo)` síncrono |
+| `/api/rescan_start` | POST | inicia thread de scan contínuo |
+| `/api/rescan_stop` | POST | para scan contínuo |
+| `/api/rescan_exec` | POST | uma iteração de scan (chamado pelo frontend) |
+| `/api/scan_nmcli` | POST | nmcli + merge sem duplicar |
+| `/api/scan_scapy` | POST | sniff scapy + merge sem duplicar |
+| `/api/exportar?zona=X` | GET | gera PDF+TXT em `imports/` |
+| `/api/memoria/stats` | GET | resumo da memória |
+| `/api/memoria/limpar` | POST | reset (opcional `?handshakes=1`) |
+| `/api/ap/<bssid>` | GET | detalhe completo do AP |
 
-**KamikaseEngine + LiveDashboard:**
-- `mover_para_zona(bssid, destino, perfil, wordlist, contextual)` aceita flag.
-- Handler `on_mover` do SocketIO repassa `contextual`.
-- `_iniciar_crack_async` aceita e propaga.
+### WebSocket (server → client)
+- `estado_inicial` (on connect)
+- `ap_descoberto`, `ap_update` — frontend dedupa por `aps[bssid]`
+- `pacotes_total{total}` — heartbeat 1Hz
+- `hashcat_start/progress/done`
+- `monitor_failed{iface,motivo}` — frontend mostra warning vermelho
+- `handshake_tentativa{bssid,estrategia,n}` — UI mostra contador
+- `handshake_capturado{bssid,pcap}`
+- `scan_continuo_status{ativo,modo}`
 
-**Template kamikase.html — melhorias massivas (~600 linhas):**
-- **Animação `morph-to-red` 3s**: card recém-movido para vermelha morpha visualmente verde→amarelo→laranja→vermelho com `transform:scale` (1→1.03→0.98→1) simulando "morte progressiva". Após 3s vira `pulse-red` permanente.
-- **Animação `crystallizing` 1.5s** ao entrar na azul: gradient verde→ciano.
-- **Multi-select com checkbox** em cada card (anti-conflito com SortableJS via `filter:"input[type=checkbox]"`). Toolbar amarela aparece no topo quando há seleção: "Ação em massa nos selecionados" com botões para cada zona destino.
-- **Bulk move por zona**: cada zona tem 3 botões na header (`→ todos vermelha`, `→ todos azul`, `selecionar tudo`).
-- **Sidebar `📚 Wordlists Disponíveis`** atualizando a cada 10s via `/api/wordlists`. Marca arquivos `_contextual_*` como `(contextual)`.
-- **Modal de crack expandido**: mostra ESSID, perfil emoji-coded, wordlist dropdown, checkbox "prepend variações contextuais" (default ON). Suporta lote: se múltiplos APs movidos juntos, modal aplica config a todos.
-- **Card azul ampliado**: mostra status, %, ETA, **contador de variações contextuais** (`📚 1000 variações prepended`), senha quebrada em badge verde com `<code>`.
-- Stat de selecionados no header.
+### WebSocket (client → server)
+- `mover_zona{bssid,destino,perfil,wordlists,contextual,stop_on_crack}`
+- `reset_deauth{bssid}`, `reset_crack{bssid,recapturar}`
 
-**Validação final:**
-- `python -m py_compile NetDroid.py` ok.
-- `WordlistContextual.gerar_variacoes('Casa01')` retorna 1000 variações ordenadas por probabilidade.
-- Templates: GOD 11.6 KB / KAMIKASE **23 KB** (cresceu ~9 KB com toolbar bulk + sidebar + animations + modal expandido).
+---
+
+## 8. Frontend (TEMPLATE_KAMIKASE)
+
+3 zonas em `<section>` `col-span-12 md:col-span-6 lg:col-span-4`:
+
+### Zona Verde (saudáveis / descobertas)
+Header: `🔄 Mapear Contínuo` · `🔓 Cadeado` · `📡 NMCLI` · `🦂 Scapy`
+- **Cadeado** ([NetDroid.py:7747](NetDroid.py#L7747)): toggle global. Travado → todas as varreduras são bloqueadas (frontend e backend); botões mostram toast `🔒 ... bloqueado — destrave o cadeado primeiro`. Default destravado.
+- **Mapear Contínuo**: alterna scan automático
+- **NMCLI**: `_scan_aps_nmcli` síncrono, idempotente
+- **Scapy**: `_scan_aps_scapy` síncrono (pode ter campos faltando — nmcli é mais completo)
+
+### Zona Vermelha (deauth)
+Drag/drop de cards verdes pra cá → dispara `mover_zona`. Mostra `pacotes` (contador) e botão reset. Indicador `1 pkt / 0.2s · ∞`.
+
+### Zona Azul (crack)
+Drag pra cá → captura handshake (loop infinito airodump+aireplay) → enfileira hashcat com wordlists escolhidas. Card mostra estágio: `capturing` (com tentativa#), `queued`, `running` (progresso+ETA), `cracked` (com animação `morph-to-green` 2s + `glow-victory` 4s) ou `failed/exhausted`.
+
+### Render perf
+`renderZonas()` debounce 80ms ([NetDroid.py:7572](NetDroid.py#L7572)) para não estourar reflows com 50+ APs.
+
+---
+
+## 9. Filtros e dedup absoluto
+
+### ESSID `?` — bloqueado
+[NetDroid.py:4574-4577](NetDroid.py#L4574) — `_normalizar_ap` retorna `None` se `essid.strip() == "?"` ou vazio. `<oculto>` é mantido (informação válida — rede com SSID broadcast desligado).
+
+### Dedup por BSSID
+- `_normalizar_bssid` ([4424](NetDroid.py#L4424)) sempre uppercase, formato `AA:BB:CC:DD:EE:FF`
+- `_mesclar_aps` ([4589](NetDroid.py#L4589)) — merge inteligente:
+  - RSSI: pega o mais forte (menos negativo)
+  - security: pega a string mais detalhada
+  - essid: prefere não-`<oculto>`
+  - canal/freq: cross-fill via lookup table
+- `_adicionar_ou_mesclar_ap` ([4640](NetDroid.py#L4640)) — usado pelos endpoints de scan manual; idempotente (clicar 100× não duplica)
+
+---
+
+## 10. Persistência
+
+### `MemoriaPersistente` ([NetDroid.py:5616](NetDroid.py#L5616))
+- `memoria/db.json`: `{version, criado_em, atualizado_em, aps: {bssid: {...}}}`
+- `memoria/handshakes/`: arquivos `.cap`/`.pcapng` movidos para cá após captura
+- Métodos: `registrar_ap`, `registrar_zona`, `registrar_handshake`, `registrar_senha`, `obter_ap`, `stats`, `limpar`
+- `registrar_senha` também faz append em `Pass/senhas.txt` (formato `ESSID:BSSID:senha:wordlist:ISO_data`), idempotente
+
+### `ZonaExporter` ([NetDroid.py:8286](NetDroid.py#L8286))
+Gera 2 arquivos em `imports/zona_<X>_<timestamp>.{txt,pdf}`. PDF via reportlab (`PDFReport`).
+
+---
+
+## 11. Convenções de código (NÃO violar)
+
+- **Single-file**: nunca dividir em módulos sem instrução explícita
+- **PT-BR**: todas as strings de UI/log/comentário em português
+- **Sem emojis** em código novo a menos que já existam (UI usa, lógica não)
+- **Graceful degradation**: cada `HAS_*` flag deve ser checado antes de usar a ferramenta; nunca `raise` se ferramenta ausente
+- **Exceptions em loops**: `try/except` amplo dentro do loop; **nunca** propagar de threads daemon ou de loops infinitos
+- **Threads**: sempre `daemon=True` + `name=...` + `stop_event`
+- **BSSID**: sempre normalizado uppercase antes de armazenar/comparar
+- **Dedup**: passar tudo por `_adicionar_ou_mesclar_ap` ou `_mesclar_aps` — nunca `self.alvos.append(ap)` direto sem checar BSSID
+- **Captura handshake**: NÃO reintroduzir hcxdumptool/scapy puro como estratégia. Manter só airodump+aireplay.
+
+---
+
+## 12. Histórico de versões
+
+### v1.5.4 (2026-04-29)
+- **`--kamikase` implica `--live`**: dashboard ativa automaticamente. Comando alvo do usuário simplificado para `sudo -E python NetDroid.py --root --kamikase`. Help text atualizado.
+
+### v1.5.3 (2026-04-29)
+- **Lazy monitor mode**: airmon-ng NÃO é mais ativado no boot. Iface fica em managed mode e nmcli funciona livremente. Monitor é ativado on-demand via `_garantir_monitor_ativo()` quando o primeiro AP entra em vermelha/azul. Após isso, nmcli volta vazio (esperado).
+- **Scan inicial 3× nmcli**: novo `_scan_inicial_nmcli_triplo()` roda nmcli 3 vezes com 1.5s de pausa, mescla via `_mesclar_aps`, dedupa por BSSID. Substitui o caminho que caía em scapy.
+- **Continuous scan**: `remapear_redes` agora usa **só nmcli** (sem fallback iw/scapy). Se nmcli vier vazio em monitor mode, log informa "esperado".
+- **Channel hopper**: agora gated por `monitor_ativo` E pausa quando há `capture_stops` ou `deauth_procs` ativos.
+- **Zona vermelha refatorada**: substituído loop Python `aireplay -0 1 a cada 200ms` (5 pkt/s) por **um único `aireplay-ng --deauth 0 -a <BSSID> --ignore-negative-one <iface>` infinito** que roda como subprocess persistente (~64 pkt/s broadcast). Trava canal antes via `iw set channel`. Thread só monitora processo, atualiza contador aproximado (+64/s) e reinicia se cair. `self.deauth_procs: Dict[bssid, [Popen]]` rastreia.
+- **Botão `🔄 recapturar handshake`**: cancela captura atual, limpa handshake antigo, re-dispara `_iniciar_crack_async` do zero. Novo socket event `recapturar_handshake` + método `KamikaseEngine.recapturar_handshake`.
+- **Contador de tentativas grande no card azul**: durante `status==="capturing"`, mostra `🎯 #N` em fonte 3xl com glow ciano.
+- Bump VERSION="1.5.3".
+
+### v1.5.2 (2026-04-29)
+- **Cadeado** na zona verde substituindo botão `🔍 Profundo`. Trava todas as varreduras (frontend + backend).
+- **Botão `🦂 Scapy`** novo + endpoint `/api/scan_scapy` (sniff passivo, idempotente).
+- **Filtro absoluto** de ESSID `?` em `_normalizar_ap` (retorna None).
+- **Handshake refatorado**: 4 estratégias antigas removidas. Estratégia única — airodump escutando contínuo + bursts de 30 deauths via aireplay-ng a cada ~8s + detecção via aircrack-ng/scapy. Channel hopper pausa enquanto captura ativa.
+- **Deauth interval `0.5s → 0.2s`** em `_loop_deauth_zona` (5 pkt/s sustentado).
+- Constante `HAS_AIRCRACK` adicionada.
+- Bump VERSION="1.5.2".
+
+### v1.5.1 (2026-04-29)
+- Auto-monitor no boot do `--live` (antes do scan inicial — crítico p/ varredura completa).
+- Scan contínuo + channel hopper paralelo (1-13 + 5GHz comuns).
+- Cross-fill canal↔freq via lookup table 802.11.
+- Botão `📡 NMCLI` + endpoint `/api/scan_nmcli`.
+- (Versão anterior) captura handshake com retry infinito 4 estratégias — substituída em v1.5.2.
+
+### v1.5.0
+- Pasta `Pass/senhas.txt` append-only.
+- Pasta `imports/` + endpoints export PDF+TXT.
+- Animação `morph-to-green` + `glow-victory` ao crack ter sucesso.
+- 9 bugs corrigidos: thread explosion (semáforo), monitor não-validado, dedup quebrado, ETA hashcat, render perf, senha persistida não-renderizada, race condition em cancel, log frontend cap, listeners órfãos.
+
+### v1.4.0 e anteriores
+Construção inicial: classes `KamikaseEngine`, `LiveDashboard`, `GodMode`, `MemoriaPersistente`. Modos `--auto`/`--god`/`--godfall`/`--kamikase` consolidados (flag `--normal` removida).
+
+---
+
+## 13. Cheat-sheet pro próximo agente
+
+### Como navegar o arquivo gigante
+```python
+# Achar uma classe
+Grep(pattern=r"^class KamikaseEngine", path="NetDroid.py")
+
+# Achar todos endpoints
+Grep(pattern=r"@app\.route", path="NetDroid.py")
+
+# Achar todos os emit
+Grep(pattern=r"emitir\(", path="NetDroid.py")
+```
+
+### Verificações antes de claim "pronto"
+```bash
+python -m py_compile NetDroid.py             # syntax
+python NetDroid.py --version                 # banner com versão correta
+sudo -E python NetDroid.py --root --kamikase --live   # smoke real (Kali)
+```
+
+### Pegadinhas comuns
+1. **`sudo` sem `-E`** quebra o venv → sempre `sudo -E python ...`
+2. **Channel hopper roda em paralelo** — se você adicionar nova feature que precisa de canal fixo, registre algo no `capture_stops` ou crie flag análoga, senão o hopper sabota
+3. **Frontend dedupa por `aps[bssid]`** — sempre emite com `bssid` válido uppercase, ou JS quebra
+4. **`emitir()` é thread-safe** mas argumentos não podem ter chave `nome` (kwarg conflita com SocketIO `name`)
+5. **HasattribuTar em `KamikaseEngine`**: alguns dicts (`capture_stops`) inicializados no `__init__` mas o código também faz `if not hasattr(self, "capture_stops")` defensivamente — é proposital para suportar reload
+6. **`HANDSHAKE_RETRY_FOREVER = True`** controla se o loop de captura é infinito; se mudar para False, há fallback de 30 tentativas
+
+### O que perguntar ao usuário antes de mexer
+- Mudanças no template HTML/JS — ele tem opinião forte sobre UX
+- Estratégias de captura/ataque — ele testa em Kali real e prefere coisas simples e previsíveis
+- Auto-comportamentos (auto-iniciar X, auto-fechar Y) — sempre confirma
+- Adicionar dependências em `requirements.txt` — pergunta primeiro

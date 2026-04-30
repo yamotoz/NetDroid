@@ -1,6 +1,2235 @@
 {
   "version": "1.4.0",
   "criado_em": "2026-04-28T01:03:37.490203",
-  "atualizado_em": "2026-04-28T01:03:37.494354",
-  "aps": {}
+  "atualizado_em": "2026-04-28T14:37:43.525145",
+  "aps": {
+    "E8:45:8B:31:DC:30": {
+      "bssid": "E8:45:8B:31:DC:30",
+      "essid": "VIVOFIBRA-WIFI6-DC30",
+      "canal": 11,
+      "rssi": -56.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T12:33:07.818865",
+      "ultima_vez": "2026-04-28T14:29:33.036357",
+      "visitas": 27
+    },
+    "58:72:C9:8F:CD:A7": {
+      "bssid": "58:72:C9:8F:CD:A7",
+      "essid": "CLARO_guel",
+      "canal": 10,
+      "rssi": -69.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T12:33:07.819880",
+      "ultima_vez": "2026-04-28T14:20:00.852618",
+      "visitas": 26,
+      "historico_zonas": [
+        {
+          "zona": "azul",
+          "em": "2026-04-28T12:35:39.253616"
+        },
+        {
+          "zona": "verde",
+          "em": "2026-04-28T12:41:56.995982"
+        }
+      ],
+      "zona_atual": "verde",
+      "crack": {
+        "status": "error",
+        "erro": "captura falhou",
+        "progresso": 0.0
+      }
+    },
+    "08:C7:F5:2C:09:E6": {
+      "bssid": "08:C7:F5:2C:09:E6",
+      "essid": "PAZ_E_AMOR",
+      "canal": 11,
+      "rssi": -66.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T12:33:07.821189",
+      "ultima_vez": "2026-04-28T14:29:33.012749",
+      "visitas": 27
+    },
+    "5A:72:C9:2F:CD:A7": {
+      "bssid": "5A:72:C9:2F:CD:A7",
+      "essid": "#CLARO-WIFI",
+      "canal": 10,
+      "rssi": -70.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T12:35:56.353384",
+      "ultima_vez": "2026-04-28T14:20:00.873364",
+      "visitas": 20
+    },
+    "E4:66:AB:55:B7:4E": {
+      "bssid": "E4:66:AB:55:B7:4E",
+      "essid": "CLARO_55B74E",
+      "canal": 9,
+      "rssi": -61.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T12:35:56.354599",
+      "ultima_vez": "2026-04-28T14:20:00.815564",
+      "visitas": 23
+    },
+    "E6:66:AB:65:B7:4E": {
+      "bssid": "E6:66:AB:65:B7:4E",
+      "essid": "#CLARO-WIFI",
+      "canal": 9,
+      "rssi": -54.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T12:35:56.357011",
+      "ultima_vez": "2026-04-28T14:29:33.057027",
+      "visitas": 27
+    },
+    "2A:6F:B9:4A:99:69": {
+      "bssid": "2A:6F:B9:4A:99:69",
+      "essid": "<oculto>",
+      "canal": 10,
+      "rssi": -72.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T12:35:56.358155",
+      "ultima_vez": "2026-04-28T14:09:53.295757",
+      "visitas": 9
+    },
+    "C8:5D:38:FA:B8:DC": {
+      "bssid": "C8:5D:38:FA:B8:DC",
+      "essid": "Familia_Navarro2G",
+      "canal": 11,
+      "rssi": -57.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T12:41:59.277613",
+      "ultima_vez": "2026-04-28T14:29:33.002598",
+      "visitas": 26,
+      "historico_zonas": [
+        {
+          "zona": "vermelha",
+          "em": "2026-04-28T14:07:04.547545"
+        },
+        {
+          "zona": "verde",
+          "em": "2026-04-28T14:07:49.016944"
+        },
+        {
+          "zona": "azul",
+          "em": "2026-04-28T14:30:28.278863"
+        },
+        {
+          "zona": "verde",
+          "em": "2026-04-28T14:36:37.591543"
+        },
+        {
+          "zona": "vermelha",
+          "em": "2026-04-28T14:36:58.950618"
+        },
+        {
+          "zona": "verde",
+          "em": "2026-04-28T14:37:43.525132"
+        }
+      ],
+      "zona_atual": "verde"
+    },
+    "44:89:6D:C2:B6:EF": {
+      "bssid": "44:89:6D:C2:B6:EF",
+      "essid": "Lane sousa",
+      "canal": 11,
+      "rssi": -72.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T12:41:59.280927",
+      "ultima_vez": "2026-04-28T14:19:13.443604",
+      "visitas": 18
+    },
+    "28:6F:B9:7A:99:69": {
+      "bssid": "28:6F:B9:7A:99:69",
+      "essid": "Red Store",
+      "canal": 10,
+      "rssi": -67.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:05:32.876637",
+      "ultima_vez": "2026-04-28T14:18:47.742549",
+      "visitas": 15
+    },
+    "68:D4:0C:CF:56:9F": {
+      "bssid": "68:D4:0C:CF:56:9F",
+      "essid": "SALA CINEMA",
+      "canal": 11,
+      "rssi": -74.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:05:57.416251",
+      "ultima_vez": "2026-04-28T14:19:18.252774",
+      "visitas": 6
+    },
+    "E2:85:4D:0F:2F:BC": {
+      "bssid": "E2:85:4D:0F:2F:BC",
+      "essid": "[LG_Wall-Mount A/C]2fbc",
+      "canal": 11,
+      "rssi": -62.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:06:05.434968",
+      "ultima_vez": "2026-04-28T14:29:33.068826",
+      "visitas": 25
+    },
+    "FA:8F:CA:91:09:E5": {
+      "bssid": "FA:8F:CA:91:09:E5",
+      "essid": "Living Room TV",
+      "canal": 6,
+      "rssi": -36.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.253966",
+      "ultima_vez": "2026-04-28T14:29:32.963737",
+      "visitas": 23
+    },
+    "D4:92:5E:31:D3:5D": {
+      "bssid": "D4:92:5E:31:D3:5D",
+      "essid": "ABRAAO",
+      "canal": 8,
+      "rssi": -58.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.254771",
+      "ultima_vez": "2026-04-28T14:29:32.967432",
+      "visitas": 23
+    },
+    "C8:5D:38:FA:B8:D4": {
+      "bssid": "C8:5D:38:FA:B8:D4",
+      "essid": "Familia_Navarro5G",
+      "canal": 132,
+      "rssi": -78.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.255595",
+      "ultima_vez": "2026-04-28T14:29:33.155921",
+      "visitas": 23
+    },
+    "0A:C7:F5:2C:09:EE": {
+      "bssid": "0A:C7:F5:2C:09:EE",
+      "essid": "PAZ_E_AMOR",
+      "canal": 116,
+      "rssi": -79.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.256509",
+      "ultima_vez": "2026-04-28T14:29:32.972014",
+      "visitas": 23
+    },
+    "D6:92:5E:31:D3:65": {
+      "bssid": "D6:92:5E:31:D3:65",
+      "essid": "ABRAAO 5G",
+      "canal": 108,
+      "rssi": -78.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.257536",
+      "ultima_vez": "2026-04-28T14:29:32.977158",
+      "visitas": 23
+    },
+    "6C:11:BA:5A:20:E2": {
+      "bssid": "6C:11:BA:5A:20:E2",
+      "essid": "N8",
+      "canal": 104,
+      "rssi": -78.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.258467",
+      "ultima_vez": "2026-04-28T14:29:32.982098",
+      "visitas": 23
+    },
+    "E4:66:AB:55:B7:50": {
+      "bssid": "E4:66:AB:55:B7:50",
+      "essid": "CLARO_55B74E",
+      "canal": 52,
+      "rssi": -61.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.259582",
+      "ultima_vez": "2026-04-28T14:29:32.987201",
+      "visitas": 23
+    },
+    "64:DB:F7:2C:E4:3D": {
+      "bssid": "64:DB:F7:2C:E4:3D",
+      "essid": "GIGA+VAL FRANCA-5G",
+      "canal": 161,
+      "rssi": -75.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.261514",
+      "ultima_vez": "2026-04-28T14:29:33.039218",
+      "visitas": 23
+    },
+    "68:D4:0C:BB:4F:8E": {
+      "bssid": "68:D4:0C:BB:4F:8E",
+      "essid": "BIA-WIFI6",
+      "canal": 52,
+      "rssi": -76.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.263026",
+      "ultima_vez": "2026-04-28T14:29:32.992264",
+      "visitas": 23
+    },
+    "FE:3B:1D:09:D0:FD": {
+      "bssid": "FE:3B:1D:09:D0:FD",
+      "essid": "Socorro_5G",
+      "canal": 100,
+      "rssi": -73.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.264195",
+      "ultima_vez": "2026-04-28T14:29:32.997481",
+      "visitas": 23
+    },
+    "6E:11:BA:2A:20:E1": {
+      "bssid": "6E:11:BA:2A:20:E1",
+      "essid": "#CLARO-WIFI",
+      "canal": 4,
+      "rssi": -60.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.265223",
+      "ultima_vez": "2026-04-28T14:29:33.051234",
+      "visitas": 23
+    },
+    "64:DB:F7:2C:E4:39": {
+      "bssid": "64:DB:F7:2C:E4:39",
+      "essid": "GIGA+VAL FRANCA",
+      "canal": 2,
+      "rssi": -57.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.266280",
+      "ultima_vez": "2026-04-28T14:29:33.033510",
+      "visitas": 23
+    },
+    "6C:11:BA:6A:20:E1": {
+      "bssid": "6C:11:BA:6A:20:E1",
+      "essid": "N8",
+      "canal": 4,
+      "rssi": -61.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.269159",
+      "ultima_vez": "2026-04-28T14:29:33.054118",
+      "visitas": 23
+    },
+    "E8:45:8B:76:6C:F0": {
+      "bssid": "E8:45:8B:76:6C:F0",
+      "essid": "Vitor&Bia",
+      "canal": 6,
+      "rssi": -75.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.270477",
+      "ultima_vez": "2026-04-28T14:29:33.065917",
+      "visitas": 22
+    },
+    "D8:36:5F:F3:BB:2F": {
+      "bssid": "D8:36:5F:F3:BB:2F",
+      "essid": "GX3000_bb2d",
+      "canal": 6,
+      "rssi": -78.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.271662",
+      "ultima_vez": "2026-04-28T14:19:18.157849",
+      "visitas": 18
+    },
+    "58:72:C9:5F:CD:A8": {
+      "bssid": "58:72:C9:5F:CD:A8",
+      "essid": "CLARO_guel",
+      "canal": 112,
+      "rssi": -70.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.277722",
+      "ultima_vez": "2026-04-28T14:29:33.007648",
+      "visitas": 23
+    },
+    "2C:B6:C2:76:2E:48": {
+      "bssid": "2C:B6:C2:76:2E:48",
+      "essid": "1003",
+      "canal": 5,
+      "rssi": -89.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.279842",
+      "ultima_vez": "2026-04-28T14:09:53.279842",
+      "visitas": 1
+    },
+    "44:89:6D:7C:70:CF": {
+      "bssid": "44:89:6D:7C:70:CF",
+      "essid": "VINICIUS",
+      "canal": 6,
+      "rssi": -85.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.281826",
+      "ultima_vez": "2026-04-28T14:09:53.281826",
+      "visitas": 1
+    },
+    "24:FD:0D:B9:E4:8A": {
+      "bssid": "24:FD:0D:B9:E4:8A",
+      "essid": "NinaNet_V2",
+      "canal": 6,
+      "rssi": -82.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.283830",
+      "ultima_vez": "2026-04-28T14:09:53.283830",
+      "visitas": 1
+    },
+    "EC:A1:D1:F3:64:60": {
+      "bssid": "EC:A1:D1:F3:64:60",
+      "essid": "CLARO_2GF36457",
+      "canal": 8,
+      "rssi": -81.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.285859",
+      "ultima_vez": "2026-04-28T14:19:18.203797",
+      "visitas": 7
+    },
+    "1E:39:29:C9:C1:04": {
+      "bssid": "1E:39:29:C9:C1:04",
+      "essid": "[LG_Wall-Mount A/C]c104",
+      "canal": 11,
+      "rssi": -88.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.299713",
+      "ultima_vez": "2026-04-28T14:09:53.299713",
+      "visitas": 1
+    },
+    "7C:F1:7E:BB:E7:22": {
+      "bssid": "7C:F1:7E:BB:E7:22",
+      "essid": "TP-Link_E722",
+      "canal": 11,
+      "rssi": -75.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.303904",
+      "ultima_vez": "2026-04-28T14:09:53.303904",
+      "visitas": 1
+    },
+    "E0:1F:ED:29:1F:81": {
+      "bssid": "E0:1F:ED:29:1F:81",
+      "essid": "MOB-HOMI101 2.4 G",
+      "canal": 13,
+      "rssi": -74.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.306014",
+      "ultima_vez": "2026-04-28T14:20:00.876746",
+      "visitas": 21
+    },
+    "72:1F:ED:29:1F:84": {
+      "bssid": "72:1F:ED:29:1F:84",
+      "essid": "\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00",
+      "canal": 13,
+      "rssi": -78.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.308091",
+      "ultima_vez": "2026-04-28T14:20:00.880092",
+      "visitas": 2
+    },
+    "5A:72:C9:9F:CD:A8": {
+      "bssid": "5A:72:C9:9F:CD:A8",
+      "essid": "<oculto>",
+      "canal": 112,
+      "rssi": -67.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.310037",
+      "ultima_vez": "2026-04-28T14:29:33.042512",
+      "visitas": 23
+    },
+    "C0:3D:D9:B1:16:17": {
+      "bssid": "C0:3D:D9:B1:16:17",
+      "essid": "Santos AgroNegocio-5G",
+      "canal": 161,
+      "rssi": -70.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.313013",
+      "ultima_vez": "2026-04-28T14:29:33.022759",
+      "visitas": 23
+    },
+    "C6:3D:D9:B1:16:17": {
+      "bssid": "C6:3D:D9:B1:16:17",
+      "essid": "Santos AgroNegocio",
+      "canal": 161,
+      "rssi": -70.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.314637",
+      "ultima_vez": "2026-04-28T14:29:33.145674",
+      "visitas": 23
+    },
+    "6A:D4:0C:BB:4F:8E": {
+      "bssid": "6A:D4:0C:BB:4F:8E",
+      "essid": "<oculto>",
+      "canal": 52,
+      "rssi": -73.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.316538",
+      "ultima_vez": "2026-04-28T14:19:18.128745",
+      "visitas": 21
+    },
+    "E0:1F:ED:29:1F:85": {
+      "bssid": "E0:1F:ED:29:1F:85",
+      "essid": "MOB-HOMI101 -5G",
+      "canal": 36,
+      "rssi": -88.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.319229",
+      "ultima_vez": "2026-04-28T14:29:33.106784",
+      "visitas": 23
+    },
+    "EC:A1:D1:F3:64:64": {
+      "bssid": "EC:A1:D1:F3:64:64",
+      "essid": "Familiasouza",
+      "canal": 149,
+      "rssi": -82.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.321682",
+      "ultima_vez": "2026-04-28T14:29:33.102378",
+      "visitas": 20
+    },
+    "E8:45:8B:31:DC:37": {
+      "bssid": "E8:45:8B:31:DC:37",
+      "essid": "VIVOFIBRA-WIFI6-DC30",
+      "canal": 149,
+      "rssi": -71.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.323603",
+      "ultima_vez": "2026-04-28T14:29:33.151969",
+      "visitas": 22
+    },
+    "EC:A1:D1:F3:62:64": {
+      "bssid": "EC:A1:D1:F3:62:64",
+      "essid": "CLARO_5GF36259",
+      "canal": 149,
+      "rssi": -79.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.325404",
+      "ultima_vez": "2026-04-28T14:19:18.161068",
+      "visitas": 18
+    },
+    "7C:F1:7E:BB:E7:24": {
+      "bssid": "7C:F1:7E:BB:E7:24",
+      "essid": "TP-Link_E722",
+      "canal": 40,
+      "rssi": -82.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.327514",
+      "ultima_vez": "2026-04-28T14:29:33.062830",
+      "visitas": 23
+    },
+    "68:D4:0C:BB:4F:8F": {
+      "bssid": "68:D4:0C:BB:4F:8F",
+      "essid": "BIA-WIFI6",
+      "canal": 1,
+      "rssi": -58.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.329359",
+      "ultima_vez": "2026-04-28T14:29:33.027650",
+      "visitas": 22
+    },
+    "3C:82:C0:8E:32:EC": {
+      "bssid": "3C:82:C0:8E:32:EC",
+      "essid": "RomanCintya",
+      "canal": 1,
+      "rssi": -67.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.332742",
+      "ultima_vez": "2026-04-28T14:29:33.120224",
+      "visitas": 23
+    },
+    "C0:3D:D9:B1:16:10": {
+      "bssid": "C0:3D:D9:B1:16:10",
+      "essid": "Santos AgroNegocio",
+      "canal": 1,
+      "rssi": -65.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.334631",
+      "ultima_vez": "2026-04-28T14:29:33.030643",
+      "visitas": 22
+    },
+    "28:6F:B9:11:E7:F9": {
+      "bssid": "28:6F:B9:11:E7:F9",
+      "essid": "YOHANELIMA",
+      "canal": 1,
+      "rssi": -76.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.336870",
+      "ultima_vez": "2026-04-28T14:19:13.450384",
+      "visitas": 16
+    },
+    "2A:6F:B9:41:E7:F9": {
+      "bssid": "2A:6F:B9:41:E7:F9",
+      "essid": "<oculto>",
+      "canal": 1,
+      "rssi": -85.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.339732",
+      "ultima_vez": "2026-04-28T14:19:18.197297",
+      "visitas": 7
+    },
+    "40:75:C3:B3:D6:8C": {
+      "bssid": "40:75:C3:B3:D6:8C",
+      "essid": "MaraNuto",
+      "canal": 1,
+      "rssi": -82.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.342857",
+      "ultima_vez": "2026-04-28T14:19:18.222243",
+      "visitas": 5
+    },
+    "EC:A1:D1:F3:62:60": {
+      "bssid": "EC:A1:D1:F3:62:60",
+      "essid": "CLARO_2GF36259",
+      "canal": 2,
+      "rssi": -72.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.345862",
+      "ultima_vez": "2026-04-28T14:29:33.113374",
+      "visitas": 18
+    },
+    "66:DB:F7:4C:E4:39": {
+      "bssid": "66:DB:F7:4C:E4:39",
+      "essid": "<oculto>",
+      "canal": 2,
+      "rssi": -59.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.348746",
+      "ultima_vez": "2026-04-28T14:29:33.083206",
+      "visitas": 22
+    },
+    "84:3C:99:1F:37:FF": {
+      "bssid": "84:3C:99:1F:37:FF",
+      "essid": "MMF",
+      "canal": 3,
+      "rssi": -75.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.351709",
+      "ultima_vez": "2026-04-28T14:19:18.238870",
+      "visitas": 13
+    },
+    "84:D8:1B:BB:CB:20": {
+      "bssid": "84:D8:1B:BB:CB:20",
+      "essid": "MLVR",
+      "canal": 3,
+      "rssi": -77.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.354929",
+      "ultima_vez": "2026-04-28T14:29:33.086130",
+      "visitas": 16
+    },
+    "30:C5:0F:B7:94:50": {
+      "bssid": "30:C5:0F:B7:94:50",
+      "essid": "Mfgodoy",
+      "canal": 4,
+      "rssi": -76.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.358172",
+      "ultima_vez": "2026-04-28T14:29:33.127468",
+      "visitas": 12
+    },
+    "F4:E8:4F:87:C1:3A": {
+      "bssid": "F4:E8:4F:87:C1:3A",
+      "essid": "THYAGO",
+      "canal": 5,
+      "rssi": -78.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.361472",
+      "ultima_vez": "2026-04-28T14:29:33.095507",
+      "visitas": 10
+    },
+    "F6:E8:4F:27:C1:3A": {
+      "bssid": "F6:E8:4F:27:C1:3A",
+      "essid": "#CLARO-WIFI",
+      "canal": 5,
+      "rssi": -79.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.365245",
+      "ultima_vez": "2026-04-28T14:29:33.098617",
+      "visitas": 14
+    },
+    "66:DB:F7:4D:1C:39": {
+      "bssid": "66:DB:F7:4D:1C:39",
+      "essid": "<oculto>",
+      "canal": 5,
+      "rssi": -75.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.368446",
+      "ultima_vez": "2026-04-28T14:29:33.134304",
+      "visitas": 2
+    },
+    "60:83:E7:90:E6:2B": {
+      "bssid": "60:83:E7:90:E6:2B",
+      "essid": "brisa-4226931",
+      "canal": 6,
+      "rssi": -77.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.371651",
+      "ultima_vez": "2026-04-28T14:19:11.360239",
+      "visitas": 18
+    },
+    "44:89:6D:D1:27:2F": {
+      "bssid": "44:89:6D:D1:27:2F",
+      "essid": "Brit",
+      "canal": 6,
+      "rssi": -80.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.374928",
+      "ultima_vez": "2026-04-28T14:09:53.374928",
+      "visitas": 1
+    },
+    "BA:F0:B9:13:14:70": {
+      "bssid": "BA:F0:B9:13:14:70",
+      "essid": "M BRASIL quarto",
+      "canal": 5,
+      "rssi": -78.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.378543",
+      "ultima_vez": "2026-04-28T14:19:18.174492",
+      "visitas": 20
+    },
+    "26:0B:88:CD:BC:E9": {
+      "bssid": "26:0B:88:CD:BC:E9",
+      "essid": "<oculto>",
+      "canal": 7,
+      "rssi": -85.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.382853",
+      "ultima_vez": "2026-04-28T14:09:53.382853",
+      "visitas": 1
+    },
+    "9E:25:4A:66:B4:6C": {
+      "bssid": "9E:25:4A:66:B4:6C",
+      "essid": "<oculto>",
+      "canal": 8,
+      "rssi": -82.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.386206",
+      "ultima_vez": "2026-04-28T14:09:53.386206",
+      "visitas": 1
+    },
+    "A2:25:4A:66:B4:6C": {
+      "bssid": "A2:25:4A:66:B4:6C",
+      "essid": "<oculto>",
+      "canal": 8,
+      "rssi": -81.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.388653",
+      "ultima_vez": "2026-04-28T14:09:53.388653",
+      "visitas": 1
+    },
+    "98:25:4A:66:B4:6C": {
+      "bssid": "98:25:4A:66:B4:6C",
+      "essid": "brisa-3768736",
+      "canal": 8,
+      "rssi": -79.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.390934",
+      "ultima_vez": "2026-04-28T14:09:53.390934",
+      "visitas": 1
+    },
+    "12:A7:93:32:8E:99": {
+      "bssid": "12:A7:93:32:8E:99",
+      "essid": "#CLARO-WIFI",
+      "canal": 8,
+      "rssi": -81.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.393509",
+      "ultima_vez": "2026-04-28T14:09:53.393509",
+      "visitas": 1
+    },
+    "10:A7:93:32:8E:9F": {
+      "bssid": "10:A7:93:32:8E:9F",
+      "essid": "Graciolaserrano",
+      "canal": 8,
+      "rssi": -82.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.397841",
+      "ultima_vez": "2026-04-28T14:19:18.229080",
+      "visitas": 5
+    },
+    "DC:62:79:BB:1F:A4": {
+      "bssid": "DC:62:79:BB:1F:A4",
+      "essid": "brisa-Holanda2101",
+      "canal": 11,
+      "rssi": -85.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.401351",
+      "ultima_vez": "2026-04-28T14:09:53.401351",
+      "visitas": 1
+    },
+    "18:0D:2C:40:3D:54": {
+      "bssid": "18:0D:2C:40:3D:54",
+      "essid": "MELO BARROS 2",
+      "canal": 11,
+      "rssi": -81.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.405061",
+      "ultima_vez": "2026-04-28T14:19:13.482725",
+      "visitas": 12
+    },
+    "D8:36:5F:B0:E3:C2": {
+      "bssid": "D8:36:5F:B0:E3:C2",
+      "essid": "VISITANTE",
+      "canal": 11,
+      "rssi": -80.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.408615",
+      "ultima_vez": "2026-04-28T14:09:53.408615",
+      "visitas": 1
+    },
+    "3C:82:C0:8E:32:F4": {
+      "bssid": "3C:82:C0:8E:32:F4",
+      "essid": "RomanCintya",
+      "canal": 132,
+      "rssi": -80.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.412762",
+      "ultima_vez": "2026-04-28T14:29:33.017708",
+      "visitas": 23
+    },
+    "E8:45:8B:49:CD:A7": {
+      "bssid": "E8:45:8B:49:CD:A7",
+      "essid": "AP304",
+      "canal": 36,
+      "rssi": -76.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.417179",
+      "ultima_vez": "2026-04-28T14:29:33.059933",
+      "visitas": 23
+    },
+    "E8:45:8B:76:6C:F7": {
+      "bssid": "E8:45:8B:76:6C:F7",
+      "essid": "Vitor&Bia",
+      "canal": 36,
+      "rssi": -85.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.420979",
+      "ultima_vez": "2026-04-28T14:29:33.071709",
+      "visitas": 23
+    },
+    "EA:45:8B:36:6C:F7": {
+      "bssid": "EA:45:8B:36:6C:F7",
+      "essid": "<oculto>",
+      "canal": 36,
+      "rssi": -84.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.424837",
+      "ultima_vez": "2026-04-28T14:29:33.074595",
+      "visitas": 17
+    },
+    "E8:45:8B:49:CD:A0": {
+      "bssid": "E8:45:8B:49:CD:A0",
+      "essid": "AP304",
+      "canal": 1,
+      "rssi": -68.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.429008",
+      "ultima_vez": "2026-04-28T14:29:33.116541",
+      "visitas": 22
+    },
+    "E4:66:AB:57:38:B6": {
+      "bssid": "E4:66:AB:57:38:B6",
+      "essid": "MELO BARROS",
+      "canal": 4,
+      "rssi": -77.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.433012",
+      "ultima_vez": "2026-04-28T14:19:18.249453",
+      "visitas": 11
+    },
+    "E6:66:AB:67:38:B6": {
+      "bssid": "E6:66:AB:67:38:B6",
+      "essid": "#CLARO-WIFI",
+      "canal": 4,
+      "rssi": -81.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.438154",
+      "ultima_vez": "2026-04-28T14:29:33.092332",
+      "visitas": 19
+    },
+    "F8:22:29:3A:90:D9": {
+      "bssid": "F8:22:29:3A:90:D9",
+      "essid": "Math Levi",
+      "canal": 6,
+      "rssi": -90.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.442184",
+      "ultima_vez": "2026-04-28T14:09:53.442184",
+      "visitas": 1
+    },
+    "78:E9:CF:01:27:1F": {
+      "bssid": "78:E9:CF:01:27:1F",
+      "essid": "VIVOFIBRA-2711",
+      "canal": 6,
+      "rssi": -81.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.446251",
+      "ultima_vez": "2026-04-28T14:19:18.225434",
+      "visitas": 14
+    },
+    "54:9F:06:27:1A:29": {
+      "bssid": "54:9F:06:27:1A:29",
+      "essid": "NASTRI",
+      "canal": 9,
+      "rssi": -74.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.450519",
+      "ultima_vez": "2026-04-28T14:18:42.939461",
+      "visitas": 10
+    },
+    "E6:62:79:BB:1F:A4": {
+      "bssid": "E6:62:79:BB:1F:A4",
+      "essid": "<oculto>",
+      "canal": 11,
+      "rssi": -81.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.454918",
+      "ultima_vez": "2026-04-28T14:09:53.454918",
+      "visitas": 1
+    },
+    "D8:36:5F:B0:E3:C0": {
+      "bssid": "D8:36:5F:B0:E3:C0",
+      "essid": "AlexELiliaQuarto",
+      "canal": 11,
+      "rssi": -84.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.459156",
+      "ultima_vez": "2026-04-28T14:09:53.459156",
+      "visitas": 1
+    },
+    "E6:66:AB:75:B7:50": {
+      "bssid": "E6:66:AB:75:B7:50",
+      "essid": "<oculto>",
+      "canal": 52,
+      "rssi": -55.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.468810",
+      "ultima_vez": "2026-04-28T14:29:33.077412",
+      "visitas": 21
+    },
+    "F2:35:75:3D:E4:0B": {
+      "bssid": "F2:35:75:3D:E4:0B",
+      "essid": "<oculto>",
+      "canal": 44,
+      "rssi": -87.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:09:53.472883",
+      "ultima_vez": "2026-04-28T14:29:33.110298",
+      "visitas": 9
+    },
+    "28:6F:B9:7A:99:6D": {
+      "bssid": "28:6F:B9:7A:99:6D",
+      "essid": "Red Store_5G",
+      "canal": 112,
+      "rssi": -87.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:18:14.327525",
+      "ultima_vez": "2026-04-28T14:19:18.232869",
+      "visitas": 11
+    },
+    "F4:E8:4F:57:C1:3B": {
+      "bssid": "F4:E8:4F:57:C1:3B",
+      "essid": "THYAGO",
+      "canal": 100,
+      "rssi": -79.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:18:14.339192",
+      "ultima_vez": "2026-04-28T14:29:33.045406",
+      "visitas": 21
+    },
+    "84:D8:1B:BB:CB:1F": {
+      "bssid": "84:D8:1B:BB:CB:1F",
+      "essid": "MLVR",
+      "canal": 153,
+      "rssi": -83.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:18:14.350563",
+      "ultima_vez": "2026-04-28T14:18:37.621895",
+      "visitas": 7
+    },
+    "FA:3B:1D:09:D0:FD": {
+      "bssid": "FA:3B:1D:09:D0:FD",
+      "essid": "Socorro",
+      "canal": 1,
+      "rssi": -67.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:18:14.374380",
+      "ultima_vez": "2026-04-28T14:29:33.124144",
+      "visitas": 21
+    },
+    "E4:FA:C4:FE:64:C9": {
+      "bssid": "E4:FA:C4:FE:64:C9",
+      "essid": "brisa-4229697",
+      "canal": 1,
+      "rssi": -82.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:18:14.382454",
+      "ultima_vez": "2026-04-28T14:19:13.489043",
+      "visitas": 16
+    },
+    "C0:3D:D9:68:AA:78": {
+      "bssid": "C0:3D:D9:68:AA:78",
+      "essid": "VIVOFIBRA-AA78",
+      "canal": 11,
+      "rssi": -83.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:18:14.407598",
+      "ultima_vez": "2026-04-28T14:29:33.138177",
+      "visitas": 19
+    },
+    "F6:E8:4F:97:C1:3B": {
+      "bssid": "F6:E8:4F:97:C1:3B",
+      "essid": "<oculto>",
+      "canal": 100,
+      "rssi": -79.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:18:14.410378",
+      "ultima_vez": "2026-04-28T14:29:33.048347",
+      "visitas": 18
+    },
+    "FA:3B:1D:A5:27:7F": {
+      "bssid": "FA:3B:1D:A5:27:7F",
+      "essid": "TNCAP_A5277F",
+      "canal": 4,
+      "rssi": -81.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:18:19.200961",
+      "ultima_vez": "2026-04-28T14:29:33.089066",
+      "visitas": 21
+    },
+    "AE:29:85:4B:09:8C": {
+      "bssid": "AE:29:85:4B:09:8C",
+      "essid": "<oculto>",
+      "canal": 36,
+      "rssi": -77.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:18:19.208965",
+      "ultima_vez": "2026-04-28T14:19:18.148075",
+      "visitas": 19
+    },
+    "EA:45:8B:39:CD:A7": {
+      "bssid": "EA:45:8B:39:CD:A7",
+      "essid": "<oculto>",
+      "canal": 36,
+      "rssi": -76.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:18:19.211589",
+      "ultima_vez": "2026-04-28T14:29:33.159219",
+      "visitas": 18
+    },
+    "30:C5:0F:B7:94:54": {
+      "bssid": "30:C5:0F:B7:94:54",
+      "essid": "Mfgodoy",
+      "canal": 149,
+      "rssi": -85.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:18:32.659087",
+      "ultima_vez": "2026-04-28T14:19:17.414555",
+      "visitas": 15
+    },
+    "48:05:E2:86:D5:BD": {
+      "bssid": "48:05:E2:86:D5:BD",
+      "essid": "<oculto>",
+      "canal": 1,
+      "rssi": -87.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:18:33.970832",
+      "ultima_vez": "2026-04-28T14:19:02.791810",
+      "visitas": 9
+    },
+    "E8:45:8B:8F:EF:F8": {
+      "bssid": "E8:45:8B:8F:EF:F8",
+      "essid": "Lan House",
+      "canal": 6,
+      "rssi": -86.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:18:33.973409",
+      "ultima_vez": "2026-04-28T14:19:02.797002",
+      "visitas": 9
+    },
+    "A0:B5:3C:D1:CF:B3": {
+      "bssid": "A0:B5:3C:D1:CF:B3",
+      "essid": "AP 502",
+      "canal": 11,
+      "rssi": -80.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:18:33.975979",
+      "ultima_vez": "2026-04-28T14:19:18.246172",
+      "visitas": 11
+    },
+    "44:89:6D:B0:0B:1F": {
+      "bssid": "44:89:6D:B0:0B:1F",
+      "essid": "IRENE SETUBAL",
+      "canal": 1,
+      "rssi": -84.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:18:37.733079",
+      "ultima_vez": "2026-04-28T14:19:05.358099",
+      "visitas": 9
+    },
+    "56:9F:06:47:1A:29": {
+      "bssid": "56:9F:06:47:1A:29",
+      "essid": "<oculto>",
+      "canal": 9,
+      "rssi": -74.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:18:37.738572",
+      "ultima_vez": "2026-04-28T14:19:05.364265",
+      "visitas": 9
+    },
+    "66:DB:F7:4C:E4:3D": {
+      "bssid": "66:DB:F7:4C:E4:3D",
+      "essid": "<oculto>",
+      "canal": 161,
+      "rssi": -75.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:18:37.741740",
+      "ultima_vez": "2026-04-28T14:29:33.148923",
+      "visitas": 15
+    },
+    "EA:45:8B:31:DC:37": {
+      "bssid": "EA:45:8B:31:DC:37",
+      "essid": "<oculto>",
+      "canal": 149,
+      "rssi": -70.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:18:37.745964",
+      "ultima_vez": "2026-04-28T14:19:18.171093",
+      "visitas": 14
+    },
+    "EA:FA:C4:FE:64:C9": {
+      "bssid": "EA:FA:C4:FE:64:C9",
+      "essid": "<oculto>",
+      "canal": 1,
+      "rssi": -85.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:18:40.209374",
+      "ultima_vez": "2026-04-28T14:19:13.476366",
+      "visitas": 11
+    },
+    "EE:FA:C4:FE:64:C9": {
+      "bssid": "EE:FA:C4:FE:64:C9",
+      "essid": "<oculto>",
+      "canal": 1,
+      "rssi": -86.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:18:40.212492",
+      "ultima_vez": "2026-04-28T14:19:13.479679",
+      "visitas": 11
+    },
+    "28:6F:B9:47:70:A9": {
+      "bssid": "28:6F:B9:47:70:A9",
+      "essid": "CasaUchoa_12C3_2G",
+      "canal": 1,
+      "rssi": -88.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:18:40.215670",
+      "ultima_vez": "2026-04-28T14:19:07.802286",
+      "visitas": 9
+    },
+    "BC:7F:7B:E2:AB:F0": {
+      "bssid": "BC:7F:7B:E2:AB:F0",
+      "essid": "Rubenss",
+      "canal": 1,
+      "rssi": -88.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:18:43.039982",
+      "ultima_vez": "2026-04-28T14:19:11.420557",
+      "visitas": 9
+    },
+    "C0:F9:B0:2C:4F:50": {
+      "bssid": "C0:F9:B0:2C:4F:50",
+      "essid": "Erro404",
+      "canal": 1,
+      "rssi": -89.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:18:43.043143",
+      "ultima_vez": "2026-04-28T14:19:11.423639",
+      "visitas": 9
+    },
+    "48:05:E2:86:D5:B8": {
+      "bssid": "48:05:E2:86:D5:B8",
+      "essid": "FAMILY",
+      "canal": 1,
+      "rssi": -88.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:19:05.425036",
+      "ultima_vez": "2026-04-28T14:19:18.200830",
+      "visitas": 6
+    },
+    "44:89:6D:3F:14:7F": {
+      "bssid": "44:89:6D:3F:14:7F",
+      "essid": "MANU'S HOUSE",
+      "canal": 11,
+      "rssi": -87.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:19:05.434980",
+      "ultima_vez": "2026-04-28T14:19:18.209987",
+      "visitas": 6
+    },
+    "62:1F:ED:29:1F:80": {
+      "bssid": "62:1F:ED:29:1F:80",
+      "essid": "\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00",
+      "canal": 36,
+      "rssi": -87.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:19:05.438173",
+      "ultima_vez": "2026-04-28T14:19:18.213311",
+      "visitas": 6
+    },
+    "2A:6F:B9:4A:99:6D": {
+      "bssid": "2A:6F:B9:4A:99:6D",
+      "essid": "<oculto>",
+      "canal": 112,
+      "rssi": -85.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:19:05.441405",
+      "ultima_vez": "2026-04-28T14:19:18.216262",
+      "visitas": 6
+    },
+    "6E:11:BA:9A:20:E2": {
+      "bssid": "6E:11:BA:9A:20:E2",
+      "essid": "<oculto>",
+      "canal": 104,
+      "rssi": -78.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:19:11.497552",
+      "ultima_vez": "2026-04-28T14:29:33.141924",
+      "visitas": 5
+    },
+    "1E:39:29:8F:7D:05": {
+      "bssid": "1E:39:29:8F:7D:05",
+      "essid": "<oculto>",
+      "canal": 1,
+      "rssi": -85.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:29:33.080284",
+      "ultima_vez": "2026-04-28T14:29:33.080284",
+      "visitas": 1
+    },
+    "64:DB:F7:2D:1C:39": {
+      "bssid": "64:DB:F7:2D:1C:39",
+      "essid": "AlexELilia",
+      "canal": 5,
+      "rssi": -81.0,
+      "score": 50,
+      "achados": [
+        {
+          "tipo": "open_network",
+          "severidade": "alta",
+          "descricao": "Rede aberta sem criptografia"
+        }
+      ],
+      "severidade_maior": "alta",
+      "pacotes": 0,
+      "primeiro_visto": "2026-04-28T14:29:33.130810",
+      "ultima_vez": "2026-04-28T14:29:33.130810",
+      "visitas": 1
+    }
+  }
 }

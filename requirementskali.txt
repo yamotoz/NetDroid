@@ -1,20 +1,50 @@
-# NetDroid v1.4.0 — Setup completo Kali Linux (1 linha, zero perguntas)
+# NetDroid v1.5.0 — Setup completo Kali Linux (1 linha, zero perguntas)
 # ═════════════════════════════════════════════════════════════════════
 #
-# COPIE E COLE A LINHA ABAIXO NO TERMINAL DO KALI:
+# COPIE E COLE A LINHA ABAIXO NO TERMINAL DO KALI (com venv isolado):
 #
 # ─────────────────────────────────────────────────────────────────────
-sudo apt update -y && sudo apt install -y python3 python3-pip python3-venv aircrack-ng mdk4 hcxdumptool hcxtools hashcat tcpdump arp-scan iw wireless-tools nmap iperf3 iptables net-tools curl wget git && pip install --break-system-packages -r requirements.txt && mkdir -p WordList && (test -f /usr/share/wordlists/rockyou.txt || sudo gunzip -k /usr/share/wordlists/rockyou.txt.gz 2>/dev/null) && cp /usr/share/wordlists/rockyou.txt ./WordList/ 2>/dev/null; cp /usr/share/wordlists/fasttrack.txt ./WordList/ 2>/dev/null; echo "✓ NetDroid pronto. Rode: sudo python NetDroid.py --root --auto --god --live"
+sudo apt update -y && sudo apt install -y python3 python3-pip python3-venv aircrack-ng mdk4 hcxdumptool hcxtools hashcat tcpdump arp-scan iw wireless-tools nmap iperf3 iptables net-tools curl wget git && python3 -m venv venv && source venv/bin/activate && pip install --upgrade pip && pip install -r requirements.txt && mkdir -p WordList && (test -f /usr/share/wordlists/rockyou.txt || sudo gunzip -k /usr/share/wordlists/rockyou.txt.gz 2>/dev/null) && cp /usr/share/wordlists/rockyou.txt ./WordList/ 2>/dev/null; cp /usr/share/wordlists/fasttrack.txt ./WordList/ 2>/dev/null; echo "✓ NetDroid pronto. Antes de rodar, ATIVE o venv: source venv/bin/activate && sudo -E python NetDroid.py --root --auto --god --live"
 # ─────────────────────────────────────────────────────────────────────
 #
-# O que esse comando faz, em ordem:
-#   1) sudo apt update -y                      → atualiza repositório
-#   2) sudo apt install -y <pacotes>           → todos os binários nativos
-#   3) pip install --break-system-packages -r requirements.txt
-#                                              → todas as deps Python
-#   4) mkdir -p WordList                       → garante a pasta de wordlists
-#   5) gunzip rockyou.txt.gz                   → descompacta se ainda gz
-#   6) cp rockyou.txt fasttrack.txt → WordList → wordlists prontas para crack
+# ═════════════════════════════════════════════════════════════════════
+# 🐍 USO DO VENV (importante!) ═════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════
+#
+# Toda vez que abrir um novo terminal para rodar NetDroid:
+#
+#   1) Entrar na pasta do projeto:
+#      cd /caminho/para/NetDroid
+#
+#   2) Ativar o venv (vai aparecer "(venv)" no prompt):
+#      source venv/bin/activate
+#
+#   3) Confirmar que está usando o python do venv:
+#      which python   →  deve mostrar /caminho/NetDroid/venv/bin/python
+#
+#   4) Rodar (use sudo -E para preservar o venv ao virar root):
+#      sudo -E python NetDroid.py --root --auto --god --live
+#      sudo -E python NetDroid.py --root --kamikase --live
+#
+#   5) Para SAIR do venv (volta ao python do sistema):
+#      deactivate
+#
+# ⚠ IMPORTANTE: o `sudo -E` preserva variáveis de ambiente (incluindo PATH
+#   do venv). Sem o -E, o sudo usa o python do sistema e perde as deps.
+#
+# ═════════════════════════════════════════════════════════════════════
+# O que o comando completo faz, em ordem:
+# ═════════════════════════════════════════════════════════════════════
+#
+#   1) sudo apt update -y                     → atualiza repositório
+#   2) sudo apt install -y <pacotes>          → binários nativos
+#   3) python3 -m venv venv                   → cria venv isolado em ./venv/
+#   4) source venv/bin/activate               → ativa venv (sem --break-system-packages!)
+#   5) pip install --upgrade pip              → pip atualizado dentro do venv
+#   6) pip install -r requirements.txt        → instala deps Python no venv
+#   7) mkdir -p WordList                      → garante pasta de wordlists
+#   8) gunzip rockyou.txt.gz                  → descompacta se necessário
+#   9) cp rockyou + fasttrack → WordList/     → wordlists prontas
 #
 # Pacotes APT instalados:
 #   python3 python3-pip python3-venv
@@ -45,20 +75,55 @@ eventlet>=0.35
 reportlab>=4.0
 
 # ═════════════════════════════════════════════════════════════════════
-# VERIFICAÇÃO PÓS-INSTALAÇÃO (rode também numa linha):
+# 🩺 VERIFICAÇÃO PÓS-INSTALAÇÃO (rode dentro do venv ativado):
 # ═════════════════════════════════════════════════════════════════════
 #
-# python3 -c "import scapy, flask, flask_socketio, reportlab; print('OK')" && which aireplay-ng mdk4 hcxdumptool hashcat tcpdump iw nmap && echo "✓ Tudo instalado" && sudo python NetDroid.py --version
+# source venv/bin/activate && \
+#   python -c "import scapy, flask, flask_socketio, reportlab, lxml; print('Python deps OK')" && \
+#   which aireplay-ng mdk4 hcxdumptool hashcat tcpdump iw nmap && \
+#   echo "✓ Bins OK" && \
+#   sudo -E python NetDroid.py --version
 #
 # ═════════════════════════════════════════════════════════════════════
-# COMANDOS DE EXEMPLO (após instalação):
+# 🎯 COMANDOS DE EXEMPLO (com venv ativado + sudo -E):
 # ═════════════════════════════════════════════════════════════════════
 #
-# Reconhecimento + dashboard ao vivo:
-#   sudo python NetDroid.py --root --auto --god --live
+# Reconhecimento total + dashboard:
+#   source venv/bin/activate
+#   sudo -E python NetDroid.py --root --auto --god --live
 #
-# Kamikase com 3 zonas drag-drop:
-#   sudo python NetDroid.py --root --kamikase --live
+# Kamikase com 3 zonas drag-drop (verde/vermelha/azul):
+#   source venv/bin/activate
+#   sudo -E python NetDroid.py --root --kamikase --live
 #
-# Ataque colossal a todos os hosts:
-#   sudo python NetDroid.py --root --auto --godfall
+# Ataque colossal a todos os hosts da rede:
+#   source venv/bin/activate
+#   sudo -E python NetDroid.py --root --auto --godfall
+#
+# ═════════════════════════════════════════════════════════════════════
+# 📁 ESTRUTURA DE PASTAS (auto-criadas em runtime):
+# ═════════════════════════════════════════════════════════════════════
+#
+#   ./WordList/         → wordlists para hashcat (você coloca os .txt)
+#   ./memoria/          → JSON com APs vistos + handshakes capturados
+#   ./Pass/             → senhas.txt (append-only, formato ESSID|BSSID|senha)
+#   ./imports/          → exports do dashboard (PDF + TXT)
+#   ./venv/             → ambiente Python isolado
+#
+# ═════════════════════════════════════════════════════════════════════
+# ❓ TROUBLESHOOTING:
+# ═════════════════════════════════════════════════════════════════════
+#
+# • "ModuleNotFoundError" mesmo com pip install ok:
+#   → você esqueceu de ativar o venv. Rode: source venv/bin/activate
+#
+# • Após `sudo python ...` dá ModuleNotFoundError:
+#   → use `sudo -E python ...` (preserva o venv)
+#   → ou rode como: `sudo $(which python) NetDroid.py ...`
+#
+# • Quer recriar o venv do zero:
+#   → deactivate; rm -rf venv; python3 -m venv venv;
+#     source venv/bin/activate; pip install -r requirements.txt
+#
+# • Aireplay-ng pede senha sudo durante kamikase:
+#   → rode o NetDroid já como root: sudo -E python NetDroid.py ...

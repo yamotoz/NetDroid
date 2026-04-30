@@ -1,9 +1,9 @@
 # NetDroid 🤖💻
 
-**Professional WiFi Network Analysis Toolkit — v1.4.0**
+**Professional WiFi Network Analysis Toolkit — v1.5.0**
 Single-file, assíncrono, Termux/Linux/Windows. **CLI minimalista de 3 modos** + booster `--root` apex militar.
 
-![NetDroid Banner](https://img.shields.io/badge/NetDroid-v1.4.0-red?style=for-the-badge)
+![NetDroid Banner](https://img.shields.io/badge/NetDroid-v1.5.0-red?style=for-the-badge)
 ![Python](https://img.shields.io/badge/Python-3.7+-blue?style=for-the-badge)
 ![Modos](https://img.shields.io/badge/Modos-3-orange?style=for-the-badge)
 
@@ -111,6 +111,23 @@ Stress profissional em **2 fases progressivas** atacando **todos os hosts da sub
 - ✅ **Linux/Kali**: caminho preferencial — funciona pleno com adapter compatível.
 - ⚠️ **Windows**: depende 100% do driver. Intel AC 9xxx / Realtek RTL88xx **bloqueiam injection** (Camada A+B detecta e avisa antes). Adapters Alfa AWUS036NHA / TL-WN722N v1 funcionam.
 - ⚠️ **Termux**: requer chip Android com suporte a monitor mode no driver (raro em consumer).
+
+## 💾 Persistência Local — `Pass/`, `imports/`, `memoria/`
+
+NetDroid mantém **3 pastas locais** para persistir tudo entre sessões:
+
+| Pasta | O que armazena | Formato |
+|---|---|---|
+| `memoria/db.json` | Banco completo de APs vistos: ESSID, BSSID, canal, RSSI, segurança, achados, histórico de zonas, senhas, handshakes | JSON estruturado |
+| `memoria/handshakes/` | Capturas `.pcapng` por AP (`<ESSID>_<BSSID>.pcapng`) | pcapng nativo |
+| **`Pass/senhas.txt`** | Todas as senhas quebradas append-only (idempotente) | `ESSID\|BSSID\|senha\|wordlist\|data` |
+| **`imports/`** | Exports de zonas via botão "📤 exportar" do dashboard | TXT + PDF |
+| `WordList/` | Wordlists do hashcat — coloque aqui seus `.txt` (rockyou, fasttrack, etc.) | TXT linha-a-linha |
+| `WordList/_contextual_*.txt` | Wordlists geradas automaticamente pelo NetDroid (1000 variações por ESSID) | TXT |
+
+Para limpar tudo (cuidado): `rm -rf memoria/ Pass/ imports/`. As wordlists em `WordList/` permanecem.
+
+---
 
 ## 🌐 `--live` — Dashboard C2 em Tempo Real
 
