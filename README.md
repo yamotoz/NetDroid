@@ -1,9 +1,9 @@
 # NetDroid 🤖💻
 
-**Professional WiFi Network Analysis Toolkit — v1.5.0**
+**Professional WiFi Network Analysis Toolkit — v1.5.6**
 Single-file, assíncrono, Termux/Linux/Windows. **CLI minimalista de 3 modos** + booster `--root` apex militar.
 
-![NetDroid Banner](https://img.shields.io/badge/NetDroid-v1.5.0-red?style=for-the-badge)
+![NetDroid Banner](https://img.shields.io/badge/NetDroid-v1.5.6-red?style=for-the-badge)
 ![Python](https://img.shields.io/badge/Python-3.7+-blue?style=for-the-badge)
 ![Modos](https://img.shields.io/badge/Modos-3-orange?style=for-the-badge)
 
@@ -14,14 +14,14 @@ Apenas **3 verbos**, cada um com escopo claro:
 ```
 --god       →  reconhecimento total (descoberta + scan + auditoria)
 --godfall   →  ataque colossal (stress massivo a todos os hosts da rede)
---kamikase  →  deauth WiFi (derruba clientes 802.11)
+--kamikase  →  deauth WiFi + dashboard C2 (carrossel por canal)
 ```
 
 E dois **modificadores**:
 
 ```
 --root      →  amplifica os 3 modos com raw sockets, scapy, binários nativos
---live      →  abre dashboard C2 web localhost com WebSocket + animações
+--live      →  abre dashboard C2 web (já é IMPLÍCITO em --kamikase desde v1.5.4)
 ```
 
 ## 🛠️ Como Usar
@@ -33,14 +33,11 @@ python NetDroid.py --auto --god
 # Ataque massivo a todos os hosts (roteador, celular, TV, IoT, …)
 python NetDroid.py --auto --godfall
 
-# Ataque sem freios até Ctrl+C
-python NetDroid.py --auto --godfall --infinite
-
 # Modo apex (precisa rodar como admin/root/su)
-sudo python NetDroid.py --root --auto --god
+sudo -E python NetDroid.py --root --auto --god
 
-# Deauth WiFi (só funciona pleno em Kali Linux)
-sudo python NetDroid.py --root --kamikase
+# Deauth WiFi + dashboard C2 — comando simplificado (--live é automático)
+sudo -E python NetDroid.py --root --kamikase
 ```
 
 ## 📋 As 3 Flags em Detalhe
@@ -55,12 +52,12 @@ Pacote completo de auditoria defensiva em **3 fases automáticas**:
 | **2/3 Scan completo** | TCP scan **1–65535** em todos os hosts descobertos + banner grabbing + cruzamento com `VULN_DB` (~80 assinaturas, severidades crítica/alta/média/info) + auditoria de headers HTTP + fingerprint SSH/Apache/IIS + verificação ProFTPD/vsftpd CVEs. |
 | **3/3 Auditoria defensiva** | 50+ device fingerprints, sondagem de 30+ API endpoints, probes de amplificação (SNMP `public`, NTP monlist, DNS `version.bind`), paths default (`/phpmyadmin`, `/.env`, `/.git/config`), ONVIF WS-Discovery, RTSP discovery, hunt de credenciais padrão, **Credential & Secret Hunting** (vazamentos, PSK exposta, SNMP communities), **risk scoring** consolidado por host. |
 
-**Saída**: relatório HTML cyberpunk responsivo + TXT executivo com glossário didático explicando cada tipo de achado.
+**Saída**: relatório HTML cyberpunk responsivo + TXT executivo com glossário didático.
 
 ### ⚡ `--godfall` — Ataque Colossal
 
 > ## ⚠️ AVISO LEGAL — `--godfall`
-> **Este módulo SATURA a rede com tráfego massivo a TODOS os hosts** (roteador, celular, TV, IoT). Pode derrubar o roteador, dropar conexões e em modo `--infinite` causar reboot do equipamento.
+> **Este módulo SATURA a rede com tráfego massivo a TODOS os hosts** (roteador, celular, TV, IoT). Pode derrubar o roteador.
 >
 > **Não há prompt de confirmação** — a flag executa direto. **Responsabilidade inteiramente do operador.**
 >
@@ -77,40 +74,64 @@ Stress profissional em **2 fases progressivas** atacando **todos os hosts da sub
 
 **Sob `--root`**: TITANFALL chega a **6.50x** (8.00x insane) com concorrência **768** (1024 insane), mais SYN flood spoofed via scapy.
 
-**Vetores de ataque (em paralelo por fase)**:
-- até **168 threads UDP raw** (payloads 65507/4096/512 alternados, 14 portas-chave)
-- até **384 threads TCP connect-and-close**
-- HTTP storm para portas web descobertas
-- SYN flood spoofed (apenas com `--root` + scapy)
-- baseline iperf3 (RECON inicial, se disponível)
-
-**Comportamento sem `--god`**: o godfall ataca a **subnet inteira** (todos os 254 IPs do /24) — bom pra spray rápido sem precisar fazer descoberta antes.
-
-**Comportamento com `--god`**: ataca **apenas os hosts vivos** descobertos na fase 1.
-
 #### Safety rails (freios automáticos)
 
 | Modo | Comportamento |
 |---|---|
 | `--godfall` | **Freios ATIVOS**: aborta automaticamente se latência ≥ 8x baseline, packet loss ≥ 92% ou success ≤ 4%. Recovery window de 90s. |
-| `--godfall --infinite` | **Sem freios**. Anuncia `🚨 REDE CAIU` mas continua até `Ctrl+C`. Quando recupera: `✓ Rede recuperou — flooding continua`. |
+| `--godfall --infinite` | **Sem freios**. Anuncia `🚨 REDE CAIU` mas continua até `Ctrl+C`. |
 
-### 📡 `--kamikase` — Deauth Flood 802.11
+### 📡 `--kamikase` — Deauth + Dashboard C2 (Carrossel por canal)
 
 > ## ⚠️ AVISO LEGAL — `--kamikase`
 > **Operar deauth contra rede sem autorização é CRIME** (Brasil Lei 12.737/2012 · EUA CFAA · EU GDPR/NIS2). Lab pessoal · pentest contratado · CTF · pesquisa apenas.
 
-**Exige `--root`**. Discovery híbrido dos APs visíveis (`iw scan` / `netsh wlan show networks` / `termux-wifi-scaninfo`), monitor mode automático, ataque infinito multi-vetor:
-- `aireplay-ng -0 0` por BSSID em paralelo
-- `mdk4` probe + assoc flood
-- Fallback scapy `Dot11Deauth` em loop
+**Exige `--root`. `--live` é automático** (dashboard em http://127.0.0.1:5556 sobe junto). A partir de v1.5.6 a arquitetura é totalmente nova:
 
-**Consent duplo**: pré-check técnico (driver Windows na lista negra exige `FORCAR`) + consent legal (`EU AUTORIZO`). **Audit log obrigatório** (`kamikase_audit.log`).
+#### 🔄 Carrossel de canal (escala pra 60+ APs sem suar)
 
-**Limitações honestas por SO**:
-- ✅ **Linux/Kali**: caminho preferencial — funciona pleno com adapter compatível.
-- ⚠️ **Windows**: depende 100% do driver. Intel AC 9xxx / Realtek RTL88xx **bloqueiam injection** (Camada A+B detecta e avisa antes). Adapters Alfa AWUS036NHA / TL-WN722N v1 funcionam.
-- ⚠️ **Termux**: requer chip Android com suporte a monitor mode no driver (raro em consumer).
+A limitação fundamental é hardware: **1 placa wifi = 1 rádio = 1 canal por vez**. NetDroid resolve via slots rotativos:
+
+1. Backend agrupa APs ativos (vermelha + azul) por canal: `{ch1: [AP1,AP2], ch6: [AP9...], ...}`
+2. Loop: trava ch1 via `iw set channel` → sobe airodump (se há AP azul) + `aireplay-ng --deauth 0` para CADA AP do canal → ataca por **15s** (vermelha) / **20s** (azul) → mata processos → checa cap pra handshakes → próximo canal
+3. **Múltiplos APs no mesmo canal são atacados simultaneamente** dentro do slot
+4. Hashcat roda em paralelo (GPU dedicada, não usa a placa wifi) — primeiro handshake pego já começa a crackear enquanto o carrossel pega os próximos
+
+Em 1 minuto, todos os canais foram atacados ciclicamente.
+
+#### 📋 Dashboard 3 zonas drag-and-drop
+
+| Zona | Cor | O que faz |
+|---|---|---|
+| 🟢 **VERDE** | Verde | APs descobertos via NMCLI (3× no boot, dedup absoluto). Header `📡 Canal X — N APs` agrupa visualmente. Botões: `🔄 Mapear Contínuo`, `🔓 Cadeado`, `📡 NMCLI`, `🦂 Scapy` (opcional). |
+| 🔴 **VERMELHA** | Vermelho pulsante | APs sob deauth flood broadcast contínuo (`aireplay --deauth 0`). Carrossel cicla por canais. Badge no header: `🔄 atacando · 8s/15s` ou `⏳ aguardando`. |
+| 🔵 **AZUL** | Ciano | Captura de handshake + crack queue. Card mostra `🎯 #N` (tentativa atual) durante captura. Detecção via `hcxpcapngtool` (zero falso positivo). Botão `🔄 recapturar handshake` em cada card. |
+
+#### 🚦 Boot, monitor mode e cadeado
+
+- **Boot**: NMCLI roda 3× sequencial, mescla, dedupa por BSSID → zona verde populada com TODAS as redes da área (canal/freq/segurança preenchidos)
+- **Monitor mode preguiçoso**: airmon-ng só ativa quando o **primeiro AP** é movido pra vermelha/azul. Antes disso, NMCLI funciona perfeitamente. Após ativação, NMCLI volta vazio (esperado — `iw dev` virou monitor) e o carrossel toma conta
+- **Cadeado** 🔓/🔒 (header zona verde): trava todas as varreduras manuais. Útil quando você já tem os alvos identificados e não quer mais APs entrando
+
+#### 🎯 Como usar com 60 APs
+
+1. Boot → NMCLI popula zona verde, agrupada por canal
+2. Move APs alvo pra vermelha (em massa OU 1 a 1, tanto faz)
+3. Carrossel detecta canais únicos automaticamente, rotaciona slots
+4. Pra capturar handshake: move APs pra azul. Carrossel inclui no slot do canal correspondente
+5. Hashcat já vai crackeando em background os primeiros que aparecerem
+
+#### Pré-checks de segurança
+
+- **Consent duplo**: pré-check técnico (driver Windows na lista negra exige `FORCAR`) + consent legal (`EU AUTORIZO`)
+- **Audit log obrigatório** (`kamikase_audit.log`)
+
+#### Limitações honestas por SO
+
+- ✅ **Linux/Kali**: caminho preferencial — funciona pleno com adapter compatível
+- ⚠️ **Windows**: depende 100% do driver. Intel AC 9xxx / Realtek RTL88xx **bloqueiam injection**. Adapters Alfa AWUS036NHA / TL-WN722N v1 funcionam
+- ⚠️ **Termux**: requer chip Android com suporte a monitor mode (raro)
+- ⛔ **WPA3**: não suportado (usa SAE handshake, não 4-way EAPOL). Funciona em WPA/WPA2-PSK
 
 ## 💾 Persistência Local — `Pass/`, `imports/`, `memoria/`
 
@@ -118,8 +139,8 @@ NetDroid mantém **3 pastas locais** para persistir tudo entre sessões:
 
 | Pasta | O que armazena | Formato |
 |---|---|---|
-| `memoria/db.json` | Banco completo de APs vistos: ESSID, BSSID, canal, RSSI, segurança, achados, histórico de zonas, senhas, handshakes | JSON estruturado |
-| `memoria/handshakes/` | Capturas `.pcapng` por AP (`<ESSID>_<BSSID>.pcapng`) | pcapng nativo |
+| `memoria/db.json` | Banco completo de APs vistos: ESSID, BSSID, canal, RSSI, segurança, achados, histórico de zonas, senhas, handshakes (write atômico via tmp+replace) | JSON estruturado |
+| `memoria/handshakes/` | Capturas `.cap`/`.pcapng` por AP | pcapng/cap nativo |
 | **`Pass/senhas.txt`** | Todas as senhas quebradas append-only (idempotente) | `ESSID\|BSSID\|senha\|wordlist\|data` |
 | **`imports/`** | Exports de zonas via botão "📤 exportar" do dashboard | TXT + PDF |
 | `WordList/` | Wordlists do hashcat — coloque aqui seus `.txt` (rockyou, fasttrack, etc.) | TXT linha-a-linha |
@@ -131,40 +152,23 @@ Para limpar tudo (cuidado): `rm -rf memoria/ Pass/ imports/`. As wordlists em `W
 
 ## 🌐 `--live` — Dashboard C2 em Tempo Real
 
-Abre um painel web local em `http://127.0.0.1:5556` com WebSocket + animações + atualização ao vivo. Tema cyberpunk preto/vermelho/branco, modo escuro padrão.
+Painel web local em `http://127.0.0.1:5556` com WebSocket + animações + atualização ao vivo. Tema cyberpunk preto/vermelho/branco.
 
 ```bash
-sudo python NetDroid.py --auto --god --live        # mapeamento ao vivo
-sudo python NetDroid.py --root --kamikase --live   # 3 zonas drag-drop
+sudo -E python NetDroid.py --auto --god --live        # mapeamento ao vivo
+sudo -E python NetDroid.py --root --kamikase          # 3 zonas drag-drop (live implícito)
 ```
 
-### Combinado com `--god`
+### Eventos WebSocket relevantes (kamikase)
 
-Painel "GOD · C2 LIVE" com:
-- 🏷️ **Header**: logo NETDROID + tag GOD pulsante + relógio.
-- 📊 **4 cards** no topo: hosts mapeados, portas abertas, vulnerabilidades, fase atual.
-- ⚔️ **Inventário de hosts** ao centro: cada card clicável expande para mostrar MAC, vendor, OS, portas, fontes de descoberta e vulnerabilidades.
-- 🥧 **Pie charts** lateral: distribuição por tipo de dispositivo + severidade de vulns.
-- 🚨 **Lista de vulnerabilidades** detectadas com badges coloridos por severidade.
-- 📡 **Log em tempo real** com timestamps e tipo (info/ok/warn/err).
-
-### Combinado com `--kamikase`
-
-Painel "KAMIKASE · C2 LIVE" com **3 zonas drag-and-drop**:
-
-| Zona | Cor | O que faz |
-|---|---|---|
-| 🟢 **VERDE** | Verde | APs descobertos saudáveis. Arraste **para fora** desta zona para iniciar ações. |
-| 🔴 **VERMELHA** | Vermelho pulsante | APs sob deauth flood: **1 pacote a cada 0.5s** infinitamente. **Animação morph-to-red 3s** ao chegar (verde→amarelo→laranja→vermelho indicando "morte progressiva"). Arraste de volta para verde para encerrar o ataque. |
-| 🔵 **AZUL** | Ciano | Crack queue do hashcat: ao soltar um AP aqui, abre modal com perfil (LOW/MEDIUM/HARD/INSANE) + wordlist + checkbox "prepend variações contextuais". Captura PMKID/handshake automaticamente, dispara hashcat com **barra de progresso, ETA e contador de variações contextuais**. Senha quebrada aparece em verde com `<code>` tag. |
-
-### Movimentação em massa
-
-| Operação | Como fazer |
+| Evento | Função |
 |---|---|
-| **1 AP** | Arraste com mouse OU marque o checkbox e use a barra superior |
-| **Vários selecionados** | Marque checkboxes em qualquer zona → barra amarela "Ação em massa" aparece no topo → escolha destino |
-| **Todos de uma zona** | Cada zona tem botões: `→ todos vermelha`, `→ todos azul`, `← todos verde`, `selecionar tudo` |
+| `ap_descoberto` / `ap_update` | Card aparece/atualiza (dedup por BSSID) |
+| `carrossel_status` | Carrossel iniciado/parado |
+| `carrossel_slot` | Entrou em novo slot — `{canal,vermelha,azul,slot_s}` |
+| `carrossel_tick` | 1Hz durante slot — `{canal,restante_s,slot_s,canais_pendentes}` |
+| `handshake_capturado` | Handshake validado via hcxpcapngtool — toast verde |
+| `handshake_log` | Trace passo-a-passo da captura visível no log do dashboard |
 
 ### Wordlist Contextual (Personalização Militar)
 
@@ -184,13 +188,9 @@ A lógica:
 - Detecta `camelCase` e separa partes (ex: `MinhaCasa` → `minha`, `casa`)
 - Combina cada base com 40+ sufixos numéricos, 17 anos (2010-2026), 25 símbolos comuns, 11 prefixos genéricos
 - Filtra para WPA2-PSK válido (8-63 chars)
-- Ordena por probabilidade: 8-12 chars primeiro (residencial mais comum)
+- Ordena por probabilidade: 8-12 chars primeiro
 
-Resultado: arquivo gerado em `./WordList/_contextual_<essid>.txt` que **inclui as variações + a wordlist base** numa única lista. Hashcat testa isso primeiro — senhas óbvias caem em segundos antes da rockyou.
-
-### Sidebar de Wordlists
-
-Painel "📚 Wordlists Disponíveis" no dashboard mostra todos os `.txt` da pasta `./WordList/` em tempo real. Marca arquivos `_contextual_*` como `(contextual)` para distinguir das wordlists base.
+Resultado: arquivo gerado em `./WordList/_contextual_<essid>.txt`. Hashcat testa isso primeiro — senhas óbvias caem em segundos antes da rockyou.
 
 ### Perfis hashcat (CPU/GPU)
 
@@ -201,27 +201,13 @@ Painel "📚 Wordlists Disponíveis" no dashboard mostra todos os `.txt` da past
 | 🟠 **HARD** | 3 | Pesado (~90% GPU) — quando você quer pressa |
 | 🔴 **INSANE** | 4 | 100% GPU descontrolado — laptop pode trottlar |
 
-Cada card de AP mostra ESSID, BSSID, canal, RSSI, **score de segurança 0–100**, badges de criptografia (WPA2/WPA3/WEP/OPN), tag WPS quando habilitado, e achados específicos (sinal excessivo, beacon anômalo, etc).
+### Pipeline de captura/crack na zona azul
 
-Header mostra contador global de pacotes + PPS em tempo real, com pie chart vivo das 3 zonas.
-
-### Captura PMKID/Handshake (zona azul)
-
-Pipeline automático ao arrastar para azul:
-1. **`hcxdumptool`** focado no BSSID (rápido, sem precisar cliente conectado).
-2. **Fallback**: se hcxdumptool falhar, dispara `aireplay-ng -0 10` para forçar reconexão e captura via `airodump-ng`.
-3. **`hcxpcapngtool`** converte pcapng → formato `22000` (PMKID + EAPOL).
-4. **`hashcat -m 22000`** com perfil escolhido + wordlist da pasta `./WordList/`.
-
-### Wordlists
-
-Coloque arquivos `.txt` em `./WordList/`. O dashboard lista todos automaticamente no modal de configuração de crack. Wordlist padrão `comum.txt` já incluída (28 senhas frequentes em PT-BR).
-
-```bash
-# Adicionar rockyou (Kali já tem)
-gunzip -k /usr/share/wordlists/rockyou.txt.gz
-cp /usr/share/wordlists/rockyou.txt ./WordList/
-```
+1. Carrossel sobe `airodump-ng --channel <C> -w <arq> --output-format cap` no canal do AP
+2. Spawna `aireplay-ng --deauth 0 -a <BSSID>` em paralelo (broadcast contínuo, força reconexão)
+3. Após o slot, checa o `.cap` via **`hcxpcapngtool`** — se conseguir extrair `.22000`, é handshake real (zero falso positivo, mesma ferramenta usada pela conversão posterior)
+4. Cap é movido pra `memoria/handshakes/` + enfileirado no hashcat com perfil/wordlists configurados
+5. Senha quebrada → animação `morph-to-green` 2s + `glow-victory` 4s + persistida em `Pass/senhas.txt`
 
 ### PDF Executivo
 
@@ -236,33 +222,35 @@ Auto-detecta SO e ativa motor militar:
 | SO | Motor | Como ativar |
 |---|---|---|
 | Windows 10/11 | `adm` | PowerShell **como Administrador** |
-| Linux/Kali | `root-kali` | `sudo python NetDroid.py ...` |
+| Linux/Kali | `root-kali` | `sudo -E python NetDroid.py ...` |
 | Termux (Android) | `root-termux` | Magisk + `pkg install tsu` + `tsu` |
 
 ### Amplificações por modo
 
-- **`--god` + `--root`**: ARP active sweep raw (10x mais rápido), raw ICMP echo (TTL real), SYN fingerprint OS, SNMP wordlist 40+, DNS cache snooping, ARP spoof passivo via tcpdump, LLDP/CDP listener.
-- **`--godfall` + `--root`**: fases ROOT com multipliers até **8.0x**, concorrência **1024**, SYN flood spoofed (IPs source aleatórios) via scapy paralelo à barragem UDP/TCP, thermal guard em Termux.
-- **`--kamikase` + `--root`**: pré-requisito obrigatório (sem `--root` recusa).
-
-## 📁 Saída
-
-Pasta `{SSID}/` com:
-
-- **`report_*.html`** — relatório cyberpunk responsivo: cards `Privilege Mode`, `Inventário de Hosts` (com Hostname, Tipo, Confiança, Fontes), `Vulnerabilidades`, `Credential & Secret Hunting`, `Risk Findings`, `Godfall Titan Sweep`, `Kamikase Death Toll`, `Latency During Stress`. Badges coloridos por tipo de dispositivo e severidade. Bloco didático expandível em cada card explicando **o que é, como validar, qual o impacto**.
-- **`{SSID}_*.txt`** — resumo executivo em PT-BR com glossário didático no final explicando cada tipo de achado que apareceu na varredura.
-- **`kamikase_audit.log`** (apenas se `--kamikase` rodou) — log append-only com timestamps, plataforma, BSSIDs alvo, comando completo.
+- **`--god` + `--root`**: ARP active sweep raw (10x mais rápido), raw ICMP echo (TTL real), SYN fingerprint OS, SNMP wordlist 40+, DNS cache snooping, ARP spoof passivo via tcpdump, LLDP/CDP listener
+- **`--godfall` + `--root`**: fases ROOT com multipliers até **8.0x**, concorrência **1024**, SYN flood spoofed (IPs source aleatórios) via scapy, thermal guard em Termux
+- **`--kamikase` + `--root`**: pré-requisito obrigatório (sem `--root` recusa)
 
 ## 🚀 Instalação
 
 ### Linux/Kali (caminho preferencial)
 ```bash
-sudo apt install python3 python3-pip aircrack-ng mdk4 tcpdump arp-scan iw nmap iperf3
-git clone https://github.com/yamotoz/NetDroid
-cd NetDroid
-pip install -r requirements.txt
-sudo python NetDroid.py --root --auto --god
+# Setup completo (1 linha — copie/cole no terminal)
+sudo apt update -y && sudo apt install -y python3 python3-pip python3-venv \
+  aircrack-ng mdk4 hcxdumptool hcxtools hashcat tcpdump arp-scan iw \
+  wireless-tools nmap iperf3 iptables net-tools curl wget git && \
+  python3 -m venv venv && source venv/bin/activate && \
+  pip install --upgrade pip && pip install -r requirements.txt && \
+  mkdir -p WordList && \
+  (test -f /usr/share/wordlists/rockyou.txt || sudo gunzip -k /usr/share/wordlists/rockyou.txt.gz 2>/dev/null) && \
+  cp /usr/share/wordlists/rockyou.txt ./WordList/ 2>/dev/null
+
+# Rodar (sempre com sudo -E pra preservar o venv)
+source venv/bin/activate
+sudo -E python NetDroid.py --root --kamikase
 ```
+
+Detalhes no [`requirementskali.txt`](requirementskali.txt).
 
 ### Termux (Android com root)
 ```bash

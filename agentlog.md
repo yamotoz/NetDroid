@@ -52,10 +52,13 @@ WORDLIST_DIR = Path("WordList")
 HANDSHAKE_DIR = Path("handshakes")
 PASS_DIR = Path("Pass")
 IMPORTS_DIR = Path("imports")
-DEAUTH_THREAD_LIMIT = 8              # semáforo anti-explosion
+DEAUTH_THREAD_LIMIT = 100            # teto de threads (carrossel + reserva)
 CONTINUOUS_SCAN_INTERVAL_SEC = 6     # cadência do scan contínuo
-CHANNEL_HOP_INTERVAL_MS = 250        # tempo em cada canal
+CHANNEL_HOP_INTERVAL_MS = 250        # tempo em cada canal (channel hopper geral)
 HANDSHAKE_RETRY_FOREVER = True       # captura handshake nunca desiste
+CARROSSEL_SLOT_VERMELHA_S = 15       # tempo por canal quando só há vermelha
+CARROSSEL_SLOT_AZUL_S = 20           # tempo por canal quando há azul
+CARROSSEL_AIRODUMP_BOOT_S = 1.5      # pausa entre airodump up e aireplay
 ```
 
 ### Capability flags (detectadas via `shutil.which`)
@@ -78,6 +81,7 @@ HANDSHAKE_RETRY_FOREVER = True       # captura handshake nunca desiste
 | `LatencyMonitor` | 2904 | iperf3 + jitter |
 | `StressEngine` | 2969 | SYN/ARP/UDP flood (`--godfall`) |
 | **`KamikaseEngine`** | **3576** | **Coração do `--kamikase --live`** — vê seção 5 |
+| **`CarrosselCanal`** | **5764** | **Orquestrador único de canais** — vê seção 5b |
 | `EventBus` | 5271 | Wrapper para SocketIO emit thread-safe |
 | `WifiSecurityAuditor` | 5317 | Score 0-100 + achados (WEP/TKIP/WPS/RSSI alto) |
 | **`PMKIDCapture`** | **5376** | **Captura handshake** — vê seção 6 |
@@ -126,43 +130,53 @@ Construtor em [NetDroid.py:3580](NetDroid.py#L3580). Estado relevante:
 - `remapear_redes` ([3743](NetDroid.py#L3743)) tenta nmcli → iw → scapy nessa ordem, mescla via `_mesclar_aps`, dedup absoluto por BSSID
 - **Channel hopper paralelo** ([_loop_channel_hopper](NetDroid.py#L3893)): `iw set channel` rotacionando 1-13 + 36/40/44/48/52/56/60/64/100-140/149-165 a cada 250ms. **Pausa quando há captura ativa** (`capture_stops` não-vazio) para não tirar a iface do canal do AP-alvo da zona azul.
 
-### Movimentar AP entre zonas ([mover_para_zona](NetDroid.py#L3915))
-Disparado pelo websocket `mover_zona`:
-- Sai da `vermelha` → seta `deauth_stops[bssid]`, join, pop
-- Sai da `azul` → seta `capture_stops[bssid]` (cancela handshake limpo)
-- Entra `vermelha` → valida `iface_monitor`, spawna `_loop_deauth_zona` com semáforo
-- Entra `azul` → chama `_iniciar_crack_async` (captura handshake → enfileira hashcat)
+### Movimentar AP entre zonas ([mover_para_zona](NetDroid.py#L3970))
+Disparado pelo websocket `mover_zona`. **A partir da v1.5.6 não spawna threads per-AP** — apenas registra na zona, ativa monitor lazy, garante carrossel rodando:
+- Sai da `vermelha`/`azul` → AP simplesmente some do agrupamento na próxima iteração do carrossel
+- Entra `vermelha` → ativa monitor lazy + `_garantir_carrossel()`
+- Entra `azul` → salva `crack_wordlists`/`crack_perfil` no AP + `_garantir_carrossel()`. Quando carrossel capturar handshake, enfileira hashcat automaticamente
 
-### Loop deauth ([_loop_deauth_zona](NetDroid.py#L3989))
-- Adquire semáforo (timeout 5s, desiste se cheio)
-- Loop while not stop_event:
-  - `aireplay-ng -0 1 -a <bssid> <iface_monitor>` (1 pkt)
-  - Fallback scapy `RadioTap()/Dot11()/Dot11Deauth(reason=7)` se aireplay timeout
-  - Incrementa contadores, emite `ap_update`
-  - **`stop_event.wait(0.2)`** — 200ms entre frames (5 pkt/s sustentado por BSSID)
-- Finally: termina subprocess, libera semáforo
+### Métodos legacy preservados (não chamados pelo `mover_para_zona`)
+- `_loop_deauth_zona` (linha ~4043): thread per-AP com `aireplay --deauth 0`. **Dead code** mas mantido pra modos não-live se houver
+- `_iniciar_crack_async` (linha ~4134): spawna `capturar_infinito`. **Dead code**
+- `PMKIDCapture.capturar_infinito` (linha ~5566): loop de captura per-AP. **Dead code**
+
+`reset_deauth(bssid)` (linha ~4227) e `reset_crack(bssid, recapturar)` (linha ~4286) foram **adaptados** ao modelo carrossel:
+- `reset_deauth`: zera contador e chama `_garantir_carrossel()`
+- `reset_crack(recapturar=True)`: delega pra `recapturar_handshake` (limpa `handshake_path`, carrossel re-tenta)
+- `reset_crack(recapturar=False)`: re-enfileira hashcat com handshake existente
 
 ---
 
-## 6. PMKIDCapture — captura cirúrgica de handshake
+## 5b. CarrosselCanal — orquestrador único de canais (v1.5.6+)
 
-Versão atual ([NetDroid.py:5461-5615](NetDroid.py#L5461)) usa **estratégia única**, escolha do usuário:
+[CarrosselCanal](NetDroid.py#L5764) — single thread, orquestra TODA a operação das zonas vermelha+azul. Resolve o conflito hardware "1 placa = 1 canal por vez" via slots rotativos.
 
-### `capturar_infinito(bssid, canal, stop_event, on_tentativa)`
-1. **Trava canal** via `iw dev <iface> set channel <canal>` (sem isso o channel hopper sabota)
-2. Sobe `airodump-ng --bssid <BSSID> --channel <C> -w <arq> --output-format cap <iface>` em background (Popen) — **escuta contínua**, não derruba entre tentativas
-3. Loop até stop_event ou pegar:
-   - Burst `aireplay-ng -0 30 -a <BSSID> <iface>` (30 deauths broadcast)
-   - Sleep 8s (tempo do cliente reconectar e aparecer EAPOL)
-   - `_cap_tem_handshake(cap_file, bssid)`:
-     - Tenta `aircrack-ng -a2 -w /dev/null -b <BSSID> <cap>` → regex `(\d+) handshake` ≥ 1
-     - Fallback scapy: `rdpcap` + conta EAPOL com `bssid in (addr1,addr2,addr3)` ≥ 2
-     - Final: `cap_size > 24KB` heurística
-4. Finally: termina airodump
+### Estado interno
+- `slot_vermelha = CARROSSEL_SLOT_VERMELHA_S` (15s)
+- `slot_azul = CARROSSEL_SLOT_AZUL_S` (20s — handshake precisa de mais tempo)
+- `canal_atual`, `canal_inicio`, `canal_slot_s` — estado público pro frontend
+- `canais_pendentes` — lista de canais aguardando próximo slot
 
-**Cancelamento limpo**: `stop_event` é setado por `mover_para_zona` quando AP sai da azul.
+### Loop principal ([_loop](NetDroid.py))
+1. `_agrupar_por_canal()` lê estado vivo de `engine.zonas` e devolve `{canal: {vermelha:[aps], azul:[aps]}}`. APs azul com `handshake_path` já preenchido são **pulados** (não capturam de novo)
+2. Para cada canal (asc): `_executar_slot(canal, grupo, slot_s)`. Slot dura 20s se há AP azul, senão 15s
+3. Se zonas vazias: idle (espera 2s e re-checa)
 
-⚠️ Estratégias antigas (hcxdumptool focado/broadcast, scapy puro, airodump-burst-curto) foram **removidas em v1.5.2** porque o usuário preferiu uma única estratégia bem afinada. NÃO reintroduzir sem instrução explícita.
+### `_executar_slot(canal, grupo, slot_s)`
+1. **Trava canal**: `iw dev <iface> set channel <canal>`
+2. **Sobe airodump** (só se há AP azul): `airodump-ng --channel <C> -w <arq> --output-format cap <iface>` (sem `--bssid` filter — captura todo o tráfego do canal)
+3. **Spawna `aireplay-ng --deauth 0 -a <BSSID>` para CADA AP** (vermelha+azul) do canal — múltiplos aireplays simultâneos no mesmo canal funcionam (cada um manda ~64 pkts/s pra seu BSSID)
+4. **Aguarda slot** atualizando UI 1×/s: emite `carrossel_tick{canal,restante_s,slot_s,ativo,canais_pendentes}` + `ap_update` por AP do slot com `carrossel_canal` e `carrossel_slot_restante`
+5. **Mata todos** os aireplays e airodump
+6. **Checa cap** pra cada AP azul via `PMKIDCapture._cap_tem_handshake(cap, bssid)` (hcxpcapngtool — match perfeito)
+7. **Se handshake real**: `_registrar_handshake_azul(ap, cap)` → copia cap pra `memoria/handshakes/`, registra na memória, enfileira no hashcat (se há `crack_wordlists` configurado)
+
+### Eventos emitidos
+- `carrossel_status{ativo}` — start/stop do carrossel
+- `carrossel_slot{canal,vermelha,azul,slot_s}` — entrada num novo slot
+- `carrossel_tick{canal,restante_s,slot_s,ativo,canais_pendentes}` — 1Hz durante slot
+- `handshake_capturado{bssid,pcap}` — quando handshake real é validado e persistido
 
 ---
 
@@ -215,11 +229,16 @@ Header: `🔄 Mapear Contínuo` · `🔓 Cadeado` · `📡 NMCLI` · `🦂 Scapy
 - **NMCLI**: `_scan_aps_nmcli` síncrono, idempotente
 - **Scapy**: `_scan_aps_scapy` síncrono (pode ter campos faltando — nmcli é mais completo)
 
-### Zona Vermelha (deauth)
-Drag/drop de cards verdes pra cá → dispara `mover_zona`. Mostra `pacotes` (contador) e botão reset. Indicador `1 pkt / 0.2s · ∞`.
+### Zona Vermelha (deauth via carrossel)
+Drag/drop de cards verdes pra cá → carrossel inclui o AP no slot do canal dele. Card mostra `pacotes` (contador aproximado +64/s durante slot ativo). Em vez de attack contínuo per-AP, é cíclico por canal.
 
-### Zona Azul (crack)
-Drag pra cá → captura handshake (loop infinito airodump+aireplay) → enfileira hashcat com wordlists escolhidas. Card mostra estágio: `capturing` (com tentativa#), `queued`, `running` (progresso+ETA), `cracked` (com animação `morph-to-green` 2s + `glow-victory` 4s) ou `failed/exhausted`.
+### Zona Azul (handshake + crack)
+Drag pra cá → carrossel captura handshake no slot do canal → quando captura validada via hcxpcapngtool, enfileira hashcat com wordlists escolhidas. Card mostra estágio: `queued_carrossel` (aguardando), `capturing` (slot ativo), `queued`/`running` (hashcat), `cracked` (animação `morph-to-green` 2s + `glow-victory` 4s).
+
+### Agrupamento por canal (v1.5.6+)
+Cada zona é renderizada agrupada por canal via `_agruparPorCanal()`. Header `📡 Canal 6 — 3 APs` precede cada grupo. Dentro do grupo, APs ordenados por RSSI desc. Canais ordenados asc (`?` no fim).
+
+No header da vermelha/azul, badge `🔄 atacando · 8s/15s` (canal sendo atendido pelo carrossel) ou `⏳ aguardando` (canal pendente). Atualiza via `carrossel_tick`.
 
 ### Render perf
 `renderZonas()` debounce 80ms ([NetDroid.py:7572](NetDroid.py#L7572)) para não estourar reflows com 50+ APs.
@@ -270,6 +289,58 @@ Gera 2 arquivos em `imports/zona_<X>_<timestamp>.{txt,pdf}`. PDF via reportlab (
 ---
 
 ## 12. Histórico de versões
+
+### v1.5.6+audit (2026-04-30) — Auditoria militar
+Auditoria estática do módulo `--kamikase`. **2 bugs reais corrigidos**, 9 falsos positivos descartados.
+
+#### Bugs corrigidos
+- **🔴 CRÍTICO — Channel hopper sabotava o carrossel**: `_loop_channel_hopper` checava `capture_stops` e `deauth_procs` (modelo antigo, agora vazios) pra pausar. Como o carrossel novo guarda estado em `self.carrossel.canal_atual`, o hopper continuava trocando canal a cada 250ms durante o slot, jogando airodump/aireplay no canal errado. **Fix em [NetDroid.py:3947-3957](NetDroid.py#L3947)** — adicionado check `carrossel_ativo` que pausa o hopper enquanto o carrossel tem `canal_atual` setado.
+- **🟡 BAIXO — Race em `self.subprocs`/`self.threads` no encerramento**: `_encerrar_limpo` iterava as listas enquanto threads filhas podiam appendar (RuntimeError "list changed during iteration"). **Fix em [NetDroid.py:5277-5289](NetDroid.py#L5277)** — `list(self.subprocs)` snapshot antes de iterar. Risco baixo pois `--live` não usa essas listas (carrossel tem suas próprias), mas existia no path `--kamikase` puro.
+
+#### Falsos positivos descartados
+- `CarrosselDeauth`: classe não existe (real é `CarrosselCanal`)
+- `subprocess.run` sem timeout: 0/16 (todos têm)
+- `bare except:`: 0 ocorrências
+- `json.dump` não-atômico: já é atômico (`tmp.replace()`)
+- Race em `contador_global`: tudo lockado em `with self.contador_lock:`
+- `os.system` no carrossel: não usa (só `subprocess.run/Popen`)
+- Divisão por zero em PPS: PPS é JS frontend com guard `dt>0?`
+- `_consent_duplo` sem EOF/Ctrl+C: já trata
+- `signal_handler` ausente: cleanup vem via `try/finally`, KeyboardInterrupt capturado em 8 lugares — funciona
+
+#### Limitações documentadas (não-bugs)
+- WPA3 não suportado (usa SAE, não 4-way EAPOL — limitação do método 4-way handshake genérico)
+
+### v1.5.6 (2026-04-29) — Carrossel de canal
+- **Nova classe `CarrosselCanal`** (NetDroid.py linha ~5764): orquestrador único single-thread que substitui o spawn-por-AP. Roda enquanto há APs em vermelha+azul. A cada slot:
+  1. Agrupa APs ativos por canal (pula azuis com `handshake_path` já preenchido)
+  2. Trava canal via `iw dev set channel`
+  3. Sobe airodump-ng (se há azul) sem `--bssid` filter — captura tudo no canal
+  4. Spawna `aireplay-ng --deauth 0 -a <BSSID>` pra cada AP (vermelha+azul) do canal
+  5. Aguarda slot (15s vermelha-only, 20s se há azul)
+  6. Mata processos, checa cap pra cada AP azul via `_cap_tem_handshake` (hcxpcapngtool)
+  7. Se handshake real → registra na memória + enfileira hashcat
+  8. Próximo canal
+- **Compat hashcat**: continua sequencial. Captura roda paralela ao crack.
+- **`mover_para_zona` refatorado**: não spawna mais thread por AP. Só registra na zona, ativa monitor mode lazy, garante carrossel rodando.
+- **`recapturar_handshake` adaptado**: limpa `handshake_path` → carrossel volta a incluir AP nos slots de captura. Sem cancel-thread-and-respawn.
+- **Constantes**: `CARROSSEL_SLOT_VERMELHA_S=15`, `CARROSSEL_SLOT_AZUL_S=20`, `CARROSSEL_AIRODUMP_BOOT_S=1.5`, `DEAUTH_THREAD_LIMIT=100` (era 8).
+- **Frontend zonas agrupadas por canal**: `_renderZonasNow` agora chama `_agruparPorCanal` → headers `📡 Canal 6 — 3 APs` entre grupos. APs ordenados por RSSI desc dentro do canal. Canais ordenados asc; `?` no fim.
+- **Badge de slot ativo nos headers**: `🔄 atacando · 8s/15s` no canal sendo atendido, `⏳ aguardando` nos pendentes. Atualiza via socket `carrossel_tick` (1Hz).
+- **Eventos novos**: `carrossel_status{ativo}`, `carrossel_slot{canal,vermelha,azul,slot_s}`, `carrossel_tick{canal,restante_s,slot_s,ativo,canais_pendentes}`.
+- **`_encerrar_limpo`** chama `carrossel.parar()` antes de matar subprocs (mata aireplays/airodumps em curso).
+- **Métodos antigos preservados** (`_loop_deauth_zona`, `_iniciar_crack_async`, `PMKIDCapture.capturar_infinito`) — não são mais chamados pelo `mover_para_zona`, mas ficam disponíveis caso modos não-live precisem.
+- Bump VERSION="1.5.6".
+
+### v1.5.5 (2026-04-29)
+- **Detecção de handshake usando `hcxpcapngtool`**: a mesma ferramenta usada pra converter `.cap` → `.22000` agora valida a presença de handshake. Match perfeito — se ela extrai, hashcat crackeia. Antes, `_cap_tem_handshake` aceitava ≥2 frames EAPOL via scapy, gerando falso positivo que quebrava no `convert_failed`.
+- **Re-trava canal antes de cada burst** em `capturar_infinito` — vermelha em canal diferente roubava a iface entre tentativas.
+- **Auto-restart airodump** se o processo morrer mid-loop.
+- **Aborta cedo se canal=`?`**: sem canal não há captura confiável; loga erro pedindo NMCLI rescan.
+- **Eventos `handshake_log`** novos: dashboard recebe trace passo-a-passo (`burst #N ch6`, `cap 4096B handshake=False`, `airodump morreu — restart`, etc).
+- **Eventos `handshake_tentativa` / `handshake_capturado`** agora têm listeners no template — toast + log visível.
+- Removido fallback scapy (≥2 EAPOL) — fonte do falso positivo.
+- Bump VERSION="1.5.5".
 
 ### v1.5.4 (2026-04-29)
 - **`--kamikase` implica `--live`**: dashboard ativa automaticamente. Comando alvo do usuário simplificado para `sudo -E python NetDroid.py --root --kamikase`. Help text atualizado.
@@ -334,11 +405,12 @@ sudo -E python NetDroid.py --root --kamikase --live   # smoke real (Kali)
 
 ### Pegadinhas comuns
 1. **`sudo` sem `-E`** quebra o venv → sempre `sudo -E python ...`
-2. **Channel hopper roda em paralelo** — se você adicionar nova feature que precisa de canal fixo, registre algo no `capture_stops` ou crie flag análoga, senão o hopper sabota
+2. **Channel hopper** (`_loop_channel_hopper`) tem 3 condições pra pausar: monitor não ativo, `capture_stops`/`deauth_procs` populados (modelo legacy), OU **`carrossel.canal_atual` setado** (modelo atual v1.5.6+). Se adicionar nova feature que precise de canal fixo, adicione check análogo
 3. **Frontend dedupa por `aps[bssid]`** — sempre emite com `bssid` válido uppercase, ou JS quebra
 4. **`emitir()` é thread-safe** mas argumentos não podem ter chave `nome` (kwarg conflita com SocketIO `name`)
-5. **HasattribuTar em `KamikaseEngine`**: alguns dicts (`capture_stops`) inicializados no `__init__` mas o código também faz `if not hasattr(self, "capture_stops")` defensivamente — é proposital para suportar reload
-6. **`HANDSHAKE_RETRY_FOREVER = True`** controla se o loop de captura é infinito; se mudar para False, há fallback de 30 tentativas
+5. **Carrossel é a fonte de verdade** das zonas vermelha+azul. Não spawna threads per-AP. NÃO chame `_loop_deauth_zona`/`_iniciar_crack_async`/`capturar_infinito` (dead code)
+6. **APs azul com `handshake_path`** preenchido são pulados pelo carrossel. Pra recapturar: `recapturar_handshake(bssid)` limpa o campo
+7. **Hashcat sequencial** (1 por vez, GPU dedicada). Captura roda paralela ao crack — quando primeiro handshake aparece, hashcat já começa enquanto carrossel pega os próximos
 
 ### O que perguntar ao usuário antes de mexer
 - Mudanças no template HTML/JS — ele tem opinião forte sobre UX
