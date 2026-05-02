@@ -290,6 +290,32 @@ Gera 2 arquivos em `imports/zona_<X>_<timestamp>.{txt,pdf}`. PDF via reportlab (
 
 ## 12. Histórico de versões
 
+### v1.6.0 (2026-05-02) — Burst-listen pattern (CORREÇÃO CRÍTICA da captura)
+
+#### Bug crítico identificado pelo usuário
+- Sintoma: "ele esta conseguindo derrubar perfeitamente, porém ele não da tempo para reconexão e a partir disso não captura de jeito nenhum o handshake"
+- Causa: usar `aireplay-ng --deauth 0` contínuo na zona azul (igual vermelha) impede o cliente de reconectar — fica perpetuamente kickado
+- Sem reconexão = sem handshake = sem captura
+
+#### Fix: padrão burst-listen (industry-standard)
+Diferenciamos comportamento por zona em `_executar_slot`:
+- **Vermelha**: continua com `aireplay-ng --deauth 0` em Popen background (objetivo é derrubar, não capturar)
+- **Azul**: NOVO padrão — `aireplay-ng -0 30` (burst finito ~1s) → espera **8s** de silêncio → próximo burst
+
+Em um slot de 30s na azul: ~3 bursts de 30 deauths + 3 janelas de escuta de 8s. Cliente tem janelas garantidas pra completar 4-way handshake (~250ms). Espelha estratégia de wifite/airgeddon.
+
+#### Constantes novas
+- `CARROSSEL_AZUL_BURST_PKTS = 30` (deauths por burst)
+- `CARROSSEL_AZUL_LISTEN_S = 8` (janela de escuta entre bursts)
+
+#### Card azul renovado
+- Agora mostra fase atual: `💥 disparando burst` ou `👂 escutando reconexão`
+- Contador de bursts disparados: `💥 ${burstCount} bursts`
+- Texto explicativo: "disparando burst (kick clientes)" / "escutando reconexão (cliente vai mandar EAPOL)"
+- Eventos `handshake_log` mais detalhados pro debug
+
+#### Bump VERSION="1.6.0" — mudança de comportamento substantiva merece minor bump
+
 ### v1.5.9 (2026-05-02) — Slot azul configurável + indicador de ciclos
 - **Slot azul configurável**: dropdown na header da zona azul (10s padrão / 30s / 1min / 5min / ∞ infinito). Slots maiores = mais chance de pegar handshake de clientes lentos (TVs, IoT). Default 10s pra ciclo rápido.
 - Novo método `CarrosselCanal.set_slot_azul(segundos, infinito, canal_lock)` simétrico ao `set_slot_vermelha`. Idem para socket handler `set_slot_azul`.

