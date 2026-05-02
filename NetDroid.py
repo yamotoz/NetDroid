@@ -7842,7 +7842,7 @@ TEMPLATE_GOD = r"""<!doctype html>
 </footer>
 
 <script>
-const sock = io({transports:["websocket","polling"]});
+const sock = io({transports:["polling"]});
 let hosts = {}; let vulns = []; let chartTypes, chartVulns;
 
 const TIPO_COLORS = ["#ff003c","#5fbcff","#5fff9f","#ffe05e","#bc13fe","#ff9d4d","#5fffe0","#ff9af0","#888"];
@@ -8451,7 +8451,7 @@ TEMPLATE_KAMIKASE = r"""<!doctype html>
 </footer>
 
 <script>
-const sock = io({transports:["websocket","polling"]});
+const sock = io({transports:["polling"]});
 let aps = {};
 let zonas = {verde:[], vermelha:[], azul:[]};
 let selecionados = new Set();
@@ -8784,6 +8784,13 @@ function moverInterno(bssid, destino, perfil, wordlist, contextual, stopOnCrack)
   sock.emit("mover_zona",{bssid, destino, perfil, wordlists, contextual, stop_on_crack: stopOnCrack !== false});
   log(`Movido ${bssid} → ${destino}${perfil?` (perfil ${perfil})`:""}${wordlists.length>1?` [${wordlists.length} wordlists]`:""}`,
        destino==="vermelha"?"err":destino==="azul"?"info":"ok");
+
+  if (destino === "vermelha" || destino === "azul") {
+    setTimeout(() => {
+      const logEl = document.getElementById("logfeed");
+      if (logEl) logEl.scrollIntoView({behavior: "smooth", block: "center"});
+    }, 150);
+  }
 }
 
 async function abrirModalParaLote(bssids, origem){
@@ -8819,6 +8826,11 @@ async function abrirModalParaLote(bssids, origem){
   }
   renderWordlistQueue();
   document.getElementById("modal").classList.remove("hidden");
+
+  setTimeout(() => {
+    const wlList = document.getElementById("modal-wordlist-list");
+    if (wlList) wlList.scrollIntoView({behavior: "smooth", block: "center"});
+  }, 100);
 }
 function fecharModal(){
   document.getElementById("modal").classList.add("hidden");
