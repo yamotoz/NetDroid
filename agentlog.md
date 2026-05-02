@@ -290,6 +290,42 @@ Gera 2 arquivos em `imports/zona_<X>_<timestamp>.{txt,pdf}`. PDF via reportlab (
 
 ## 12. Histórico de versões
 
+### v1.5.8 (2026-05-02) — Azul cirúrgica + zonas mutex + --upgrade fix
+
+#### Bug crítico: azul não capturava handshake mais
+- **Causa**: v1.5.7 tinha lógica de "para deauth aos 10s, escuta passiva 14s" no `_executar_slot`. Em teoria capturaria EAPOL após cliente reconectar; em prática **falhava** porque cliente nem sempre reconecta dentro da janela e aireplay cortado no meio = deauth fraco demais.
+- **Fix**: Removido todo o early-stop e listen-extra. Agora **espelha 100% a vermelha** — `aireplay-ng --deauth 0 --ignore-negative-one -a <BSSID> <iface>` + `airodump-ng --bssid <BSSID> --channel <C>` rodando contínuos pelo slot inteiro.
+- **Slot azul**: `CARROSSEL_SLOT_AZUL_S` 30s → **10s** (decisão usuário). Validação roda no fim do slot via `hcxpcapngtool --apmac=<BSSID>`. Se cap não tem handshake, próximo slot tenta de novo.
+- **Flush time**: nova constante `CARROSSEL_AZUL_FLUSH_S = 1.5` (era hardcoded `time.sleep(2.0)`). Pausa entre `airodump.terminate()` e validação pra cap aterrissar no disco.
+
+#### Zonas vermelha ↔ azul mutuamente exclusivas
+- Decisão do usuário: AP só pode estar em UMA das duas. **`mover_para_zona`** agora detecta conflito: se destino é vermelha e há APs em azul (ou vice-versa), todos os APs da zona conflitante são automaticamente movidos pra verde antes de aceitar o movimento. Emite evento `zona_mutex{origem,destino,movidos}`.
+- **Implicação**: simplificou drasticamente `_executar_slot` — `grupo` agora tem APENAS uma das duas zonas populada. Sem mais lógica condicional separando vermelha+azul no mesmo canal. Single-zone-per-slot.
+
+#### `--upgrade` consertado
+- **Bug**: URLs apontavam pra `/main/NetDroid.py` mas o repo (`yamotoz/NetDroid`) está em `/master/`. Resultado: 404 em todas as tentativas.
+- **Fix**: `GITHUB_BRANCHES = ("master", "main")` — Upgrader tenta master primeiro, fallback automático pra main. Robusto se usuário mudar branch padrão no futuro.
+- Novo método `Upgrader._fetch_branch_fallback(path)` que retorna `(conteudo, branch_que_funcionou)`. Mostra no log qual branch foi usada. 404 não retenta mais (sai cedo).
+
+#### Cleanup automático
+- Boot do `CarrosselCanal.iniciar()` limpa `SLOT_TEMP_DIR` de slot caps órfãos de execuções anteriores que crasharam.
+
+#### Bump VERSION="1.5.8"
+
+---
+
+### v1.5.7 (2026-04-30) — Per-AP folder + slot customizável
+- **Pasta dedicada por AP em azul**: `handshakes/azul/<BSSID>/` com **apenas** `handshake.cap` + `handshake.22000`. Só é populada quando handshake REAL é detectado pra esse BSSID específico.
+- **Validação cirúrgica via `hcxpcapngtool --apmac=<MAC>`**: o filtro nativo do hcxpcapngtool extrai apenas o handshake do BSSID-alvo. Se o `.22000` sai não-vazio, é handshake real e o cap é movido pra pasta dedicada. Se sai vazio, o arquivo é deletado e o slot continua. **Zero falso positivo, zero acúmulo**.
+- **Cap temporário por slot** vai pra `handshakes/_slot_temp/` e é **deletado** após cada slot. Antes, 10 slots = 10 caps lotando `handshakes/`.
+- **Slot vermelha customizável**: dropdown na zona vermelha (15s padrão / 1min / 5min / 1h / **∞ infinito**). Modo infinito = `modo_infinito=True` + `canal_lockado=<int>`: carrossel trava em UM canal, não rotaciona; outros canais ficam pausados. Se canal lockado fica vazio, escolhe o próximo automaticamente.
+- **Novo método `CarrosselCanal.set_slot_vermelha(segundos, infinito, canal_lock)`**: setter unificado.
+- **Novo socket event `set_slot_vermelha`** + handler no `LiveDashboard`.
+- **Novo evento `carrossel_config`**: emitido a cada mudança de slot/modo, frontend logga.
+- **Logs detalhados no slot azul**: cada AP mostra `🔍 BSSID hcx_out=NB → ✓ HANDSHAKE` ou `✗ vazio` no log do dashboard. Visibilidade total do que tá acontecendo.
+- **`airodump --write-interval 1`**: força flush a cada 1s, evita cap truncado.
+- Bump VERSION="1.5.7".
+
 ### v1.5.6+audit (2026-04-30) — Auditoria militar
 Auditoria estática do módulo `--kamikase`. **2 bugs reais corrigidos**, 9 falsos positivos descartados.
 

@@ -6,7 +6,7 @@
 # ─────────────────────────────────────────────────────────────────────
 sudo apt update -y && sudo apt install -y python3 python3-pip python3-venv aircrack-ng mdk4 hcxdumptool hcxtools hashcat tcpdump arp-scan iw wireless-tools nmap iperf3 iptables net-tools curl wget git && python3 -m venv venv && source venv/bin/activate && pip install --upgrade pip && pip install -r requirements.txt && mkdir -p WordList && (test -f /usr/share/wordlists/rockyou.txt || sudo gunzip -k /usr/share/wordlists/rockyou.txt.gz 2>/dev/null) && cp /usr/share/wordlists/rockyou.txt ./WordList/ 2>/dev/null; cp /usr/share/wordlists/fasttrack.txt ./WordList/ 2>/dev/null; echo "✓ NetDroid pronto. Antes de rodar, ATIVE o venv: source venv/bin/activate && sudo -E python NetDroid.py --root --auto --god --live"
 # ─────────────────────────────────────────────────────────────────────
-#
+# sudo apt-get install hcxdumptool && sudo apt-get install hcxtools
 # ═════════════════════════════════════════════════════════════════════
 # 🐍 USO DO VENV (importante!) ═════════════════════════════════════════
 # ═════════════════════════════════════════════════════════════════════

