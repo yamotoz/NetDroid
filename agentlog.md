@@ -290,6 +290,17 @@ Gera 2 arquivos em `imports/zona_<X>_<timestamp>.{txt,pdf}`. PDF via reportlab (
 
 ## 12. Histórico de versões
 
+### v1.5.9 (2026-05-02) — Slot azul configurável + indicador de ciclos
+- **Slot azul configurável**: dropdown na header da zona azul (10s padrão / 30s / 1min / 5min / ∞ infinito). Slots maiores = mais chance de pegar handshake de clientes lentos (TVs, IoT). Default 10s pra ciclo rápido.
+- Novo método `CarrosselCanal.set_slot_azul(segundos, infinito, canal_lock)` simétrico ao `set_slot_vermelha`. Idem para socket handler `set_slot_azul`.
+- **Métricas per-AP de tentativas**:
+  - `ap["carrossel_ciclos"]`: incrementa cada vez que o AP é incluído num slot
+  - `ap["carrossel_tempo_acumulado_s"]`: total de segundos que o AP foi atacado pelo carrossel (soma dos slots)
+  - Reset automático quando AP entra em azul vindo de outra zona (`origem != "azul"`)
+- **Card azul renovado**: mostra `🎯 ciclo #N · ⏱ Xmin Ys acumulados` em vez de só `#N`. Status `queued_carrossel` ganhou bloco visual `⏳ aguardando slot · próximo ciclo do carrossel`.
+- Frontend `setSlotAzul(val)` espelha `setSlotVermelha`. Toast informa "slots maiores = mais chance pra clientes lentos".
+- Bump VERSION="1.5.9"
+
 ### v1.5.8 (2026-05-02) — Azul cirúrgica + zonas mutex + --upgrade fix
 
 #### Bug crítico: azul não capturava handshake mais

@@ -114,7 +114,7 @@ except Exception:
     HAS_REPORTLAB = False
 
 # ═══════════════════════ CONSTANTS ════════════════════════════
-VERSION = "1.5.8"
+VERSION = "1.5.9"
 GITHUB_REPO = "yamotoz/NetDroid"
 GITHUB_BRANCHES = ("master", "main")  # tenta master 1º (default atual), main como fallback
 GITHUB_RAW_TEMPLATE = "https://raw.githubusercontent.com/{repo}/{branch}/{path}"
@@ -4059,9 +4059,15 @@ class KamikaseEngine:
                     if wls:
                         ap["crack_wordlists"] = wls
                     ap["crack_perfil"] = perfil
+                    # Reset contadores se AP está vindo pra azul agora
+                    # (origem != azul significa transição)
+                    if origem != "azul":
+                        ap["carrossel_ciclos"] = 0
+                        ap["carrossel_tempo_acumulado_s"] = 0
                     ap["crack"] = {"status": "queued_carrossel",
                                     "progresso": 0.0, "eta": "?",
-                                    "tentativa": 0}
+                                    "tentativa": 0,
+                                    "tempo_acumulado_s": 0}
                 # Atualiza iface no pmkid (caso seja usado em outros caminhos)
                 if self.pmkid:
                     self.pmkid.iface = self.iface_monitor or self.iface_orig
@@ -5831,6 +5837,34 @@ class CarrosselCanal:
         self.modo_infinito = False
         self.canal_lockado: Optional[int] = None
 
+    def set_slot_azul(self, segundos: int = 10, infinito: bool = False,
+                        canal_lock: Optional[int] = None) -> None:
+        """Configura duração do slot da zona azul (captura handshake).
+        Se infinito=True, trava em UM canal igual à vermelha. Default 10s.
+        Slots maiores aumentam chance de pegar handshake de clientes lentos
+        (TVs, IoT). Slots menores rodam mais ciclos por minuto."""
+        if infinito:
+            self.modo_infinito = True
+            if canal_lock is None:
+                grupos = self._agrupar_por_canal()
+                for ch in sorted(grupos.keys()):
+                    if grupos[ch]["vermelha"] or grupos[ch]["azul"]:
+                        canal_lock = ch
+                        break
+            self.canal_lockado = canal_lock
+            self.eng.ui.warn(f"🔒 Modo infinito (azul): travado em ch{canal_lock or '?'}")
+        else:
+            self.modo_infinito = False
+            self.canal_lockado = None
+            self.slot_azul = max(5, int(segundos))
+            self.eng.ui.info(f"⏱ Slot azul: {self.slot_azul}s")
+        try: emitir("carrossel_config",
+                     slot_vermelha=self.slot_vermelha,
+                     slot_azul=self.slot_azul,
+                     infinito=self.modo_infinito,
+                     canal_lockado=self.canal_lockado)
+        except Exception: pass
+
     def set_slot_vermelha(self, segundos: int = 15, infinito: bool = False,
                             canal_lock: Optional[int] = None) -> None:
         """Configura duração do slot da zona vermelha. Se infinito=True,
@@ -6066,16 +6100,23 @@ class CarrosselCanal:
                         stderr=subprocess.DEVNULL,
                     )
                     procs.append((bssid, p, zona_corrente))
+                    # Métrica per-AP de tentativas (azul) — ciclos + tempo acumulado
                     if zona_corrente == "azul":
+                        ap["carrossel_ciclos"] = ap.get("carrossel_ciclos", 0) + 1
+                        ap["carrossel_tempo_acumulado_s"] = (
+                            ap.get("carrossel_tempo_acumulado_s", 0) + slot_s
+                        )
                         ap["crack"] = {
                             "status": "capturing",
                             "progresso": 0.0,
                             "eta": "?",
-                            "tentativa": ap.get("crack", {}).get("tentativa", 0) + 1,
+                            "tentativa": ap["carrossel_ciclos"],
+                            "tempo_acumulado_s": ap["carrossel_tempo_acumulado_s"],
                         }
                         emitir("ap_update", **ap)
                         try: emitir("handshake_log", bssid=bssid,
-                                      msg=f"▶ ch{canal} aireplay --deauth 0 + airodump ON ({slot_s}s)")
+                                      msg=f"▶ ciclo #{ap['carrossel_ciclos']} ch{canal} "
+                                            f"aireplay --deauth 0 + airodump ON ({slot_s}s)")
                         except Exception: pass
                 except Exception as e:
                     eng.ui.warn(f"  aireplay {bssid} falhou: {e}")
@@ -7453,6 +7494,26 @@ class LiveDashboard:
             except Exception as e:
                 dash.ui.warn(f"set_slot_vermelha falhou: {e}")
 
+        @sio.on("set_slot_azul")
+        def on_set_slot_azul(data):
+            """Configura duração do slot azul (10s/30s/60s/300s) ou
+            ativa modo infinito (lock-on-channel). Default 10s.
+            Slots maiores aumentam chance de pegar handshake de clientes lentos."""
+            if dash.modo != "kamikase" or not dash.kami_engine:
+                return
+            eng = dash.kami_engine
+            if not eng.carrossel:
+                try: eng._garantir_carrossel()
+                except Exception: pass
+            if not eng.carrossel:
+                return
+            try:
+                infinito = bool(data.get("infinito", False))
+                segundos = int(data.get("segundos", 10))
+                eng.carrossel.set_slot_azul(segundos=segundos, infinito=infinito)
+            except Exception as e:
+                dash.ui.warn(f"set_slot_azul falhou: {e}")
+
         @sio.on("recapturar_handshake")
         def on_recapturar_handshake(data):
             """Cancela captura em andamento e refaz do zero (zona azul)."""
@@ -8239,9 +8300,20 @@ TEMPLATE_KAMIKASE = r"""<!doctype html>
 
   <!-- ZONA AZUL -->
   <section class="col-span-12 md:col-span-6 lg:col-span-4 glass rounded-lg p-4 zone-blue">
-    <div class="flex items-center justify-between mb-2">
+    <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
       <h2 class="sec" style="color:var(--cyan)">🔵 Azul · Crack Hashcat</h2>
-      <span class="text-xs text-gray-500">PMKID + handshake</span>
+      <div class="flex items-center gap-2">
+        <label class="text-[0.65rem] text-gray-500 uppercase tracking-wider">slot:</label>
+        <select id="slot-azul-sel" onchange="setSlotAzul(this.value)"
+                class="bg-gray-900 border border-cyan-700/50 text-cyan-300 text-xs rounded px-2 py-1"
+                aria-label="Duração do slot do carrossel azul">
+          <option value="10" selected>10s (padrão)</option>
+          <option value="30">30s</option>
+          <option value="60">1 min</option>
+          <option value="300">5 min</option>
+          <option value="infinito">∞ Infinito (1 canal)</option>
+        </select>
+      </div>
     </div>
     <div class="flex gap-1 mb-3 flex-wrap">
       <button onclick="moverTodos('azul','verde')" class="btn-zone btn-green" aria-label="Mover todos para verde">← todos verde</button>
@@ -8409,14 +8481,21 @@ function cardHTML(ap, zona){
     if(senha && !status){
       extra = senhaBlock + `<div class="text-[0.65rem] text-gray-500 mt-1 italic">restaurado da memória persistente</div>`;
     } else {
-      // Contador grande de tentativas durante captura (status === "capturing")
-      const tentativa = (ap.crack && ap.crack.tentativa) ? ap.crack.tentativa : 0;
-      const blocoTentativas = (status === "capturing" && tentativa > 0) ? `
+      // Contador grande de tentativas + tempo acumulado durante captura
+      const tentativa = (ap.crack && ap.crack.tentativa) ? ap.crack.tentativa : (ap.carrossel_ciclos || 0);
+      const tempoAcumulado = (ap.crack && ap.crack.tempo_acumulado_s) ? ap.crack.tempo_acumulado_s : (ap.carrossel_tempo_acumulado_s || 0);
+      const tempoLabel = tempoAcumulado >= 60 ? `${Math.floor(tempoAcumulado/60)}min ${tempoAcumulado%60}s` : `${tempoAcumulado}s`;
+      const blocoTentativas = ((status === "capturing" || status === "queued_carrossel") && tentativa > 0) ? `
         <div class="text-center mt-2 p-2 rounded border border-cyan-700/50 bg-cyan-950/30">
           <div class="text-[0.62rem] uppercase tracking-[0.2em] text-cyan-300 font-bold">🎯 capturando handshake</div>
-          <div class="text-3xl font-black text-cyan-200 leading-tight" style="text-shadow:0 0 10px rgba(0,212,255,0.7);font-family:'JetBrains Mono',monospace">#${tentativa}</div>
-          <div class="text-[0.65rem] text-gray-400 italic">tentativa em andamento — burst deauth + airodump escutando</div>
-        </div>` : "";
+          <div class="text-3xl font-black text-cyan-200 leading-tight" style="text-shadow:0 0 10px rgba(0,212,255,0.7);font-family:'JetBrains Mono',monospace">ciclo #${tentativa}</div>
+          <div class="text-[0.7rem] text-cyan-400 mt-1">⏱ ${tempoLabel} acumulados</div>
+          <div class="text-[0.65rem] text-gray-400 italic">aireplay --deauth 0 + airodump ON</div>
+        </div>` : ((status === "queued_carrossel") ? `
+        <div class="text-center mt-2 p-2 rounded border border-cyan-700/30 bg-cyan-950/20">
+          <div class="text-[0.62rem] uppercase tracking-[0.2em] text-cyan-300 font-bold">⏳ aguardando slot</div>
+          <div class="text-[0.7rem] text-gray-400 italic">próximo ciclo do carrossel</div>
+        </div>` : "");
       extra = `
         <div class="text-xs mt-2 flex items-center justify-between">
           <span class="text-cyan-400 font-bold">${statusCrackLabel(status)}</span>
@@ -9074,6 +9153,19 @@ function setSlotVermelha(val){
     const label = seg >= 3600 ? `${seg/3600}h` : seg >= 60 ? `${seg/60}min` : `${seg}s`;
     log(`⏱ Slot vermelha alterado: ${label}`, "info");
     toast(`⏱ Slot vermelha: ${label}`);
+  }
+}
+function setSlotAzul(val){
+  if(val === "infinito"){
+    sock.emit("set_slot_azul", {infinito: true});
+    log("🔒 Modo infinito (azul) ativado — captura focada em 1 canal", "warn");
+    toast("🔒 Slot azul infinito · captura travada em 1 canal");
+  } else {
+    const seg = parseInt(val) || 10;
+    sock.emit("set_slot_azul", {segundos: seg, infinito: false});
+    const label = seg >= 60 ? `${seg/60}min` : `${seg}s`;
+    log(`⏱ Slot azul alterado: ${label}`, "info");
+    toast(`⏱ Slot azul: ${label} · slots maiores = mais chance pra clientes lentos`);
   }
 }
 
