@@ -1,0 +1,77 @@
+<!DOCTYPE html><html lang="pt-BR"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NetDroid Report - NET_5GB02B06</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box} body{background:#0a0a0a;color:#fff;font-family:'Courier New',monospace}
+.wrap{max-width:1200px;margin:0 auto;padding:16px} h1{color:#cc0000;text-align:center;font-size:clamp(1.4rem,2.5vw,2rem);margin:12px 0 18px}
+h2{color:#cc0000;margin:10px 0 12px;font-size:clamp(1rem,2vw,1.2rem)} .meta{color:#999;text-align:center;font-size:.86rem;margin:8px 0 12px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:10px 0 14px}
+.stat{background:#121212;border:1px solid #2b2b2b;border-radius:8px;padding:10px;text-align:center} .val{font-size:1.45rem;color:#00ff9f;font-weight:700}
+.lbl{font-size:.75rem;color:#a6a6a6} .card{background:#111;border:1px solid #2a2a2a;border-radius:8px;padding:14px;margin:12px 0}
+.topo{text-align:center;margin:12px 0 6px} .table-wrap{overflow:auto;max-width:100%} table{width:100%;border-collapse:collapse;min-width:980px}
+th{background:#1a0000;color:#cc0000;padding:8px;text-align:left;border-bottom:2px solid #cc0000} td{padding:7px 8px;border-bottom:1px solid #242424;vertical-align:top}
+tr:hover{background:#171717}
+.badge{display:inline-block;padding:2px 7px;border-radius:10px;font-size:.72rem;background:#222;color:#ddd;border:1px solid #333}
+.badge.tipo-roteador{background:#06223e;color:#5fbcff;border-color:#0e4f8e}
+.badge.tipo-camera_ip{background:#3e0606;color:#ff6c6c;border-color:#8e0e0e}
+.badge.tipo-impressora{background:#3a3a06;color:#ffe05e;border-color:#7e7e0e}
+.badge.tipo-windows_pc{background:#1c2a3a;color:#9ad0ff;border-color:#3a5a82}
+.badge.tipo-linux_servidor{background:#063e1a;color:#5fff9f;border-color:#0e8e3a}
+.badge.tipo-mobile{background:#3a063e;color:#ff9af0;border-color:#7e0e8e}
+.badge.tipo-iot_generico{background:#3e2a06;color:#ffb35e;border-color:#8e5e0e}
+.badge.tipo-nas{background:#063e3a;color:#5fffe0;border-color:#0e8e7e}
+.badge.tipo-voip{background:#2a063e;color:#c89aff;border-color:#5e0e8e}
+.badge.tipo-desconhecido{background:#222;color:#888}
+.badge.sev-critica{background:#3e0606;color:#ff4d4d;border-color:#cc0000}
+.badge.sev-alta{background:#3a1c06;color:#ff9d4d;border-color:#a35200}
+.badge.sev-media{background:#3a3206;color:#ffe05e;border-color:#a37700}
+.badge.sev-info{background:#06283e;color:#5fbcff;border-color:#0e4f8e}
+tr.sev-critica td:first-child{border-left:3px solid #cc0000}
+tr.sev-alta td:first-child{border-left:3px solid #cc7000}
+.didatica-wrap{margin:8px 0 14px;padding:10px 12px;background:#0c1418;border-left:3px solid #00d4ff;border-radius:6px}
+.didatica-intro{color:#9ad0ff;font-size:.86rem;margin:4px 0 8px;line-height:1.45}
+.didatica-intro em{color:#fdee00;font-style:normal}
+details.didatica{margin:6px 0;padding:6px 10px;background:#101820;border:1px solid #1f2e3a;border-radius:5px;cursor:pointer}
+details.didatica summary{color:#00d4ff;font-weight:600;font-size:.84rem;list-style:none;outline:none}
+details.didatica summary::-webkit-details-marker{display:none}
+details.didatica summary::before{content:"▶ ";color:#bc13fe;font-size:.7rem}
+details.didatica[open] summary::before{content:"▼ "}
+details.didatica p{margin:6px 0;color:#cfd8dc;font-size:.82rem;line-height:1.5}
+details.didatica strong{color:#00ff9f}
+details.didatica code{background:#000;color:#fdee00;padding:2px 6px;border-radius:3px;font-size:.78rem}
+@media (max-width:700px){.wrap{padding:10px} .card{padding:10px} table{min-width:780px}}
+</style></head><body><div class="wrap">
+<h1>NetDroid Report</h1>
+<p class="meta">SSID: NET_5GB02B06 | Gateway: 192.168.0.1 | Subnet: 192.168.0.0/24 | 2026-05-03 17:00</p>
+<div class="stats">
+<div class="stat"><div class="val">0</div><div class="lbl">Hosts</div></div>
+<div class="stat"><div class="val">0</div><div class="lbl">Portas Abertas</div></div>
+<div class="stat"><div class="val">0</div><div class="lbl">Vulnerabilidades</div></div>
+<div class="stat"><div class="val">0</div><div class="lbl">Segredos</div></div>
+<div class="stat"><div class="val">0</div><div class="lbl">PSKs</div></div>
+<div class="stat"><div class="val">0</div><div class="lbl">Riscos</div></div>
+</div>
+<div class="topo"></div>
+<div class="card"><h2>Inventário de Hosts (Inteligência Total)</h2>
+<div class="didatica-wrap"><details class="didatica"><summary>📖 O que é "Inventário de Hosts" e como validar</summary><p><strong>Resumo:</strong> Lista de todos os dispositivos detectados na rede. Cada host traz IP, MAC, vendor (fabricante via OUI), sistema operacional inferido, hostname, tipo de dispositivo (roteador, câmera, impressora, etc.), portas abertas e nível de confiança (0–100) baseado em quantas técnicas independentes confirmaram cada campo.</p><p><strong>Como validar manualmente:</strong> Cruze o IP com o roteador (página de clientes conectados). Confirme o MAC físicamente em equipamentos. Para hostname, faça ping pelo nome (`ping nome.local`). Para tipo de dispositivo, abra o IP no navegador e confira a interface.</p><p><strong>Impacto:</strong> Saber TUDO que está na rede é o primeiro passo de qualquer auditoria. Dispositivos desconhecidos podem ser invasores ou IoT esquecido com firmware vulnerável. Hostname/MAC/vendor mostram quem é quem.</p></details></div>
+<div class="table-wrap"><table><tr><th>IP</th><th>Hostname</th><th>Tipo</th><th>MAC</th><th>Vendor</th><th>OS</th><th>Portas</th><th>Serviços</th><th>Web</th><th>Conf.</th><th>Risk</th><th>Fontes</th></tr></table></div></div>
+<div class="card"><h2>Privilege Mode — Apex Militar</h2>
+            <p class="meta">Plataforma: <strong>linux</strong> |
+            Motor: <strong>root-kali</strong> |
+            Capabilities: 10</p>
+            <div class="didatica-wrap"><details class="didatica"><summary>📖 O que é "Modo Root (--root) — Auditoria Apex" e como validar</summary><p><strong>Resumo:</strong> Quando ativo, troca técnicas user-space por raw sockets, scapy, binários nativos privilegiados (aireplay-ng, mdk4, tcpdump, nmap como root) e telemetria de kernel. Detecta SO automaticamente: Windows Admin → motor &#x27;adm&#x27;; Linux como root → &#x27;root-kali&#x27;; Termux com su → &#x27;root-termux&#x27;.</p><p><strong>Como validar manualmente:</strong> Cheque o banner &#x27;PRIVILEGE MODE ATIVADO&#x27; no boot — ele lista o motor detectado e as capabilities disponíveis. Em Linux: `id` deve retornar uid=0. Em Windows: PowerShell/cmd como Admin. Sem privilégio, --root recusa explicitamente com instruções.</p><p><strong>Impacto:</strong> ARP active sweep ~10x mais rápido que ping; SYN scan stealth não loga em syslog do alvo; SNMP testa wordlist 40+; godfall com concorrência 1024 e SYN flood spoofed via scapy. Capacidade total do tooling fica ~3-5x maior — comparável a Kali/nmap em modo SYN.</p></details></div>
+            <p><span class='badge sev-info'>aireplay</span> <span class='badge sev-info'>airmon</span> <span class='badge sev-info'>arp-scan</span> <span class='badge sev-info'>iptables</span> <span class='badge sev-info'>iw</span> <span class='badge sev-info'>nmap</span> <span class='badge sev-info'>raw_socket</span> <span class='badge sev-info'>scapy</span> <span class='badge sev-info'>tcpdump</span> <span class='badge sev-info'>thermal_monitor</span></p>
+            <p class="meta">Boost aplicado em: --discover, --Insane, --god, --godfall.</p>
+            </div><div class="card"><h2>⚡ Kamikase Death Toll ⚡</h2>
+            <p class="meta">Total: <strong>3,136</strong> pacotes |
+            Duração: <strong>55.6s</strong> |
+            PPS médio: <strong>56</strong> |
+            BSSIDs atacados: <strong>39</strong> |
+            Motivo do encerramento: Ctrl+C</p>
+            <p class="meta">Audit log: <code>NET_5GB02B06/kamikase_audit.log</code></p>
+            <div class="didatica-wrap"><details class="didatica"><summary>📖 O que é "Kamikase — Deauth Flood 802.11" e como validar</summary><p><strong>Resumo:</strong> Stress 802.11 que envia frames Management de Deauthentication para todos os APs visíveis em loop infinito até Ctrl+C. Frame com src=BSSID e dst=ff:ff:ff:ff:ff:ff força TODOS os clientes associados a se reconectarem. Em alta taxa, derruba a rede.</p><p><strong>Como validar manualmente:</strong> Em outra máquina, observe o WiFi: clientes desconectam constantemente, ícone fica &#x27;reconectando&#x27;. Em Wireshark (monitor mode em outra placa), filtro `wlan.fc.type_subtype == 0x0c` mostra deauth frames. Confira `kamikase_audit.log`.</p><p><strong>Impacto:</strong> Para teste autorizado: mostra resiliência da rede, identifica se há rogue AP detection, força clientes a re-handshake (útil para captura WPA). Sem autorização: CRIME (Lei 12.737/2012 BR; CFAA EUA). Defesa: 802.11w (Management Frame Protection).</p></details></div>
+            <div class="table-wrap"><table>
+            <tr><th>ESSID</th><th>BSSID</th><th>Canal</th><th>RSSI</th><th>Pacotes</th></tr>
+            <tr><td>#CLARO-WIFI</td><td>16:CA:56:25:59:C9</td><td>4</td><td>-73</td><td>0</td></tr><tr><td>#CLARO-WIFI</td><td>B2:BB:E5:49:A1:88</td><td>10</td><td>-85</td><td>0</td></tr><tr><td>#CLARO-WIFI</td><td>DA:31:39:2F:99:2A</td><td>8</td><td>-74</td><td>0</td></tr><tr><td>--</td><td>0E:EA:14:1C:4C:52</td><td>6</td><td>-67</td><td>0</td></tr><tr><td>--</td><td>42:33:06:C8:B6:99</td><td>11</td><td>-78</td><td>0</td></tr><tr><td>--</td><td>86:0B:BB:BE:73:EF</td><td>52</td><td>-86</td><td>0</td></tr><tr><td>--</td><td>B2:42:A1:F9:E5:0A</td><td>3</td><td>-78</td><td>0</td></tr><tr><td>--</td><td>B2:42:A1:F9:FF:16</td><td>3</td><td>-80</td><td>0</td></tr><tr><td>--</td><td>DA:31:39:9F:99:2B</td><td>112</td><td>-89</td><td>0</td></tr><tr><td>[LG_Wall-Mount A/C]1238</td><td>32:34:DB:1D:12:38</td><td>11</td><td>-80</td><td>0</td></tr><tr><td>[LG_Wall-Mount A/C]d9ca</td><td>E2:85:4D:C4:D9:CA</td><td>11</td><td>-85</td><td>0</td></tr><tr><td>[LG_Wall-Mount A/C]fc1a</td><td>E2:85:4D:14:FC:1A</td><td>11</td><td>-85</td><td>0</td></tr><tr><td>AM</td><td>0C:EA:14:2C:4C:52</td><td>6</td><td>-68</td><td>0</td></tr><tr><td>AM</td><td>0E:EA:14:1C:4C:53</td><td>157</td><td>-81</td><td>0</td></tr><tr><td>AM VISITANTES</td><td>0E:EA:14:2C:4C:52</td><td>6</td><td>-67</td><td>0</td></tr><tr><td>AM VISITANTES</td><td>0E:EA:14:4C:4C:53</td><td>157</td><td>-80</td><td>0</td></tr><tr><td>Avocacius Hall</td><td>6C:72:20:3E:CA:26</td><td>1</td><td>-75</td><td>0</td></tr><tr><td>brisa-Ap900</td><td>24:2F:D0:04:8C:EB</td><td>10</td><td>-83</td><td>0</td></tr><tr><td>CLARO_2G119770</td><td>D8:6C:5A:11:97:79</td><td>1</td><td>-84</td><td>0</td></tr><tr><td>CLARO_2G499F8A</td><td>B0:BB:E5:49:9F:8F</td><td>10</td><td>-83</td><td>0</td></tr><tr><td>CLARO_8F992A</td><td>D8:31:39:5F:99:2B</td><td>112</td><td>-89</td><td>0</td></tr><tr><td>CLARO_8F992A</td><td>D8:31:39:8F:99:2A</td><td>8</td><td>-72</td><td>0</td></tr><tr><td>CONEXAO_VIAGENS</td><td>3C:F9:F0:A8:E6:B0</td><td>5</td><td>-84</td><td>0</td></tr><tr><td>Crisantina</td><td>6C:BA:B8:E9:F9:D8</td><td>157</td><td>-84</td><td>0</td></tr><tr><td>Ctadeu2G</td><td>14:CA:56:D5:59:C9</td><td>4</td><td>-75</td><td>0</td></tr><tr><td>CTADEU_VIVO</td><td>84:0B:BB:EE:73:E8</td><td>11</td><td>-77</td><td>0</td></tr><tr><td>CTADEU_VIVO</td><td>84:0B:BB:EE:73:EF</td><td>52</td><td>-87</td><td>0</td></tr><tr><td>ESCRITORIO-AP_502-2G</td><td>B4:F2:67:21:7A:91</td><td>11</td><td>-83</td><td>0</td></tr><tr><td>Família PP_2.4G</td><td>A0:B5:3C:5E:BB:42</td><td>8</td><td>-74</td><td>0</td></tr><tr><td>Família PP_5G</td><td>A2:B5:3C:5E:BB:4A</td><td>157</td><td>-91</td><td>0</td></tr><tr><td>FREITASSEGUNDO</td><td>DA:D8:E5:82:24:C4</td><td>1</td><td>-85</td><td>0</td></tr><tr><td>HEESAUDIO</td><td>68:D7:9A:C7:13:99</td><td>13</td><td>-85</td><td>0</td></tr><tr><td>MetalTex Brasil</td><td>40:33:06:B8:B6:99</td><td>11</td><td>-78</td><td>0</td></tr><tr><td>NET_2GB02B06</td><td>8C:44:4F:B0:2B:0B</td><td>1</td><td>-50</td><td>3,136</td></tr><tr><td>NET_5GB02B06</td><td>8C:44:4F:B0:2B:13</td><td>48</td><td>-50</td><td>0</td></tr><tr><td>PROSPERIDADE</td><td>C4:50:9C:F4:E4:B0</td><td>1</td><td>-80</td><td>0</td></tr><tr><td>Quarto Casal</td><td>0E:EA:14:4C:4C:52</td><td>6</td><td>-67</td><td>0</td></tr><tr><td>Sala-AM</td><td>0E:EA:14:3C:4C:52</td><td>6</td><td>-68</td><td>0</td></tr><tr><td>TNCAP8FE009 2.4G</td><td>A0:B5:3C:8F:E0:09</td><td>11</td><td>-82</td><td>0</td></tr></table></div></div>
+<p class="meta">NetDroid v1.6.0 — gerado automaticamente</p>
+</div></body></html>

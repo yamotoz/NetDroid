@@ -6297,32 +6297,36 @@ class CarrosselCanal:
 
         tool = shutil.which("hcxpcapngtool") or shutil.which("hcxpcaptool")
         out_22000 = ap_dir / "handshake.22000"
-        # Limpa qualquer .22000 anterior (pode ser de tentativa antiga vazia)
+        temp_22000 = ap_dir / "temp_all.22000"
+        
         try:
-            if out_22000.exists() and out_22000.stat().st_size == 0:
-                out_22000.unlink()
+            if out_22000.exists(): out_22000.unlink()
+            if temp_22000.exists(): temp_22000.unlink()
         except Exception: pass
 
         saida = ""
-        filtros_apmac = [bssid.lower(), bssid.replace(":", "").lower()]
-        houve_erro = False
-        for apmac in filtros_apmac:
+        try:
+            # hcxpcapngtool moderno não tem --apmac, extrai tudo primeiro
+            r = subprocess.run([tool, "-o", str(temp_22000), str(slot_cap)],
+                                capture_output=True, text=True, timeout=15)
+            saida = ((r.stdout or "") + (r.stderr or ""))[:200].replace('\n', ' | ')
+            
+            if temp_22000.exists() and temp_22000.stat().st_size > 0:
+                hashtool = shutil.which("hcxhashtool")
+                if hashtool:
+                    apmac = bssid.replace(":", "").lower()
+                    r2 = subprocess.run([hashtool, "-i", str(temp_22000), f"--mac-ap={apmac}", "-o", str(out_22000)],
+                                        capture_output=True, text=True, timeout=10)
+                else:
+                    # Sem hcxhashtool, aceita tudo (arriscado se houver múltiplos APs, mas salva a captura)
+                    shutil.copy(str(temp_22000), str(out_22000))
+        except Exception as e:
+            saida = str(e)
+            eng.ui.warn(f"  extração hcx falhou: {e}")
+        finally:
             try:
-                if out_22000.exists():
-                    out_22000.unlink()
-            except Exception:
-                pass
-            try:
-                r = subprocess.run([tool, f"--apmac={apmac}",
-                                     "-o", str(out_22000), str(slot_cap)],
-                                    capture_output=True, text=True, timeout=15)
-                saida = ((r.stdout or "") + (r.stderr or ""))[:200].replace('\n', ' | ')
-                if out_22000.exists() and out_22000.stat().st_size > 0:
-                    break
-            except Exception as e:
-                houve_erro = True
-                saida = str(e)
-                continue
+                if temp_22000.exists(): temp_22000.unlink()
+            except Exception: pass
 
         existe = out_22000.exists()
         tamanho_22000 = out_22000.stat().st_size if existe else 0
@@ -7251,6 +7255,16 @@ class LiveDashboard:
         except Exception as e:
             self.ui.error(f"Servidor dashboard falhou: {e}")
 
+    def _sync_estado(self):
+        if self.modo == "kamikase" and self.kami_engine:
+            with self.kami_engine.zonas_lock:
+                self.estado["zonas"] = {
+                    "verde": list(self.kami_engine.zonas.get("verde", [])),
+                    "vermelha": list(self.kami_engine.zonas.get("vermelha", [])),
+                    "azul": list(self.kami_engine.zonas.get("azul", []))
+                }
+            self.estado["aps"] = self.kami_engine.alvos
+
     # ─── rotas e handlers ───────────────────────────────────
 
     def _registrar_rotas(self):
@@ -7265,6 +7279,7 @@ class LiveDashboard:
 
         @app.route("/api/estado")
         def api_estado():
+            dash._sync_estado()
             return jsonify(dash.estado)
 
         @app.route("/api/wordlists")
@@ -7479,6 +7494,7 @@ class LiveDashboard:
 
         @sio.on("connect")
         def on_connect():
+            dash._sync_estado()
             sio.emit("estado_inicial", dash.estado)
 
         @sio.on("mover_zona")
@@ -8278,6 +8294,7 @@ TEMPLATE_KAMIKASE = r"""<!doctype html>
       💾 <span id="mem-aps">0</span>·<span id="mem-hs">0</span>·<span id="mem-pwd" class="text-green-400 font-bold">0</span>
     </span>
     <span class="hidden md:inline text-gray-500">v1.5.0</span>
+    <button onclick="pararTudo()" class="btn-zone btn-red ml-2" style="border: 1px solid var(--red); box-shadow: 0 0 8px rgba(255,0,60,0.5);" aria-label="Parar todos os ataques e mover APs para zona verde">🛑 PARAR TUDO</button>
   </div>
 </header>
 
@@ -8740,6 +8757,19 @@ async function moverTodos(origem, destino){
     lista.forEach(bssid=>moverInterno(bssid, destino));
     renderZonas();
   }
+}
+
+function pararTudo() {
+  const vermelha = [...zonas['vermelha']];
+  const azul = [...zonas['azul']];
+  if(vermelha.length === 0 && azul.length === 0) {
+    log("Nenhum ataque em andamento para parar.", "info");
+    return;
+  }
+  vermelha.forEach(b => moverInterno(b, 'verde'));
+  azul.forEach(b => moverInterno(b, 'verde'));
+  renderZonas();
+  log("🛑 PARADA GERAL: Todos os ataques foram parados e os APs movidos para a zona verde.", "err");
 }
 
 // ─── Sortable drag-drop ─────────────────────────
